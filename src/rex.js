@@ -94,15 +94,20 @@ export function openFloat(session, win, name, { args = [], focus = true, place =
 
 // The sidebar is a full-height pane at one edge of a window: the right edge and a quarter
 // of the width unless config.json says otherwise:
-//   { "sidebar": { "side": "left", "width": 0.2, "auto": true } }
-export function sidebarPrefs() {
+//   { "sidebar": { "side": "left", "columns": 30, "auto": true } }
+// `columns` is a width in terminal cells, the same in every window; `width` is a share of the
+// window (0.25) and is used when `columns` is absent.
+export function sidebarPrefs(session, win) {
   const c = settings().sidebar ?? {};
-  const width = Number(c.width);
-  return { side: c.side === "left" ? "left" : "right", width: width > 0.05 && width < 0.6 ? width : 0.25, auto: c.auto === true };
+  let width = Number(c.width);
+  width = width > 0.05 && width < 0.6 ? width : 0.25;
+  const columns = Number(c.columns);
+  if (columns >= 8 && session && win) width = Math.max(0.05, Math.min(0.6, (columns + 0.5) / windowCells(session, win).cols));
+  return { side: c.side === "left" ? "left" : "right", width, auto: c.auto === true };
 }
 const sidebarsIn = (win) => windowBlocks(win).filter((b) => labelOf(win, b.block) === LABELS.sidebar);
 function openSidebar(session, win) {
-  const { side, width } = sidebarPrefs();
+  const { side, width } = sidebarPrefs(session, win);
   const tiled = (win.layers ?? []).find((l) => l.kind === "tiled");
   const anchor = tiled?.layout?.split?.split_id ?? tiled?.layout?.block_id;
   if (!anchor) return { ok: false, error: "no tiled pane to split" };
@@ -119,11 +124,11 @@ function openSidebar(session, win) {
 export function fitSidebar(session, windowId) {
   const win = findWindow(view(session), { window: windowId });
   if (!win) return false;
-  const { side, width } = sidebarPrefs();
+  const { side, width } = sidebarPrefs(session, win);
   const right = side === "right";
   const sb = sidebarsIn(win).find((b) => b.kind === "tiled" && b.rect[3] > 0.99 && (right ? b.rect[0] + b.rect[2] > 0.99 : b.rect[0] < 0.01));
   if (!sb) return false;
-  if (Math.abs(sb.rect[2] - width) < 0.015) return true;
+  if (Math.abs(sb.rect[2] - width) < 0.008) return true;
   // The pane on the other side of the sidebar's inner border.
   const edge = right ? sb.rect[0] : sb.rect[0] + sb.rect[2];
   const neighbour = windowBlocks(win).find((b) => b.kind === "tiled" && b.block !== sb.block && Math.abs((right ? b.rect[0] + b.rect[2] : b.rect[0]) - edge) < 0.005);

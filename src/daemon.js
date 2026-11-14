@@ -217,6 +217,10 @@ function scan() {
     sessionLabels.set(s.session_id, s.label ?? "");
     refreshSession(s.session_id);
     autoSidebar(s.session_id, null, 0);
+    // Tabs in the background that already show a sidebar are brought in line with the settings too.
+    for (const [win, w] of windowLabels) {
+      if (w.session === s.session_id && [...blockInfo].some(([, b]) => b.window === win && b.label === "Pokedex")) autoSidebar(s.session_id, win, 0);
+    }
     const list = rex(["block", "ls", "-s", s.session_id, "--json"]).value?.blocks ?? [];
     for (const blk of list) {
       if (blk.creator_name !== TERMINAL) continue;

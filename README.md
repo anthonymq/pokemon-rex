@@ -87,15 +87,16 @@ option is turned off.
 
   ```json
   {
-    "sidebar": { "auto": true, "side": "right", "width": 0.25 },
+    "sidebar": { "auto": true, "side": "left", "columns": 30 },
     "labels": { "enabled": true },
     "sounds": { "enabled": false },
     "toasts": { "enabled": false }
   }
   ```
 
-  `sidebar.side` (`right` or `left`) and `sidebar.width` (a share of the tab)
-  place the sidebar. With `sidebar.auto`, the tab each session is showing always
+  `sidebar.side` (`right` or `left`) places the sidebar. Its width is
+  `sidebar.columns`, in terminal cells and the same in every tab (30 is slim and
+  still fits everything), or `sidebar.width`, a share of the tab (default 0.25). With `sidebar.auto`, the tab each session is showing always
   has it, so it is there whichever session or tab you switch to: the daemon opens
   it, moves it to the configured side and puts it back to the configured width
   when a session appears or shows another tab. Rex's "Autobalance splits" setting
