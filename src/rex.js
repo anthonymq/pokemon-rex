@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ROOT, settings } from "./herdr.js";
+import { ROOT, STATE_DIR, settings, readJson, writeJson } from "./herdr.js";
 
 const CANDIDATES = [
   process.env.REX_BIN,
@@ -97,17 +97,39 @@ export function openFloat(session, win, name, { args = [], focus = true, place =
 //   { "sidebar": { "side": "left", "columns": 30, "auto": true } }
 // `columns` is a width in terminal cells, the same in every window; `width` is a share of the
 // window (0.25) and is used when `columns` is absent.
-export function sidebarPrefs(session, win) {
+//
+// Turning columns into a share needs the window's width in cells, and Rex only knows a
+// terminal's real size while a client shows it: a pane in a background tab reports a stale
+// one. So the width in cells is taken from the last sidebar that was on screen (it measures
+// itself, see fitColumns) and kept in window-cols.json.
+const COLS_FILE = path.join(STATE_DIR, "window-cols.json");
+export function sidebarPrefs() {
   const c = settings().sidebar ?? {};
   let width = Number(c.width);
   width = width > 0.05 && width < 0.6 ? width : 0.25;
-  const columns = Number(c.columns);
-  if (columns >= 8 && session && win) width = Math.max(0.05, Math.min(0.6, (columns + 0.5) / windowCells(session, win).cols));
-  return { side: c.side === "left" ? "left" : "right", width, auto: c.auto === true };
+  const columns = Number(c.columns) >= 8 ? Number(c.columns) : null;
+  if (columns) {
+    const total = Number(readJson(COLS_FILE, {}).cols);
+    width = total > 20 ? Math.max(0.05, Math.min(0.6, (columns + 0.5) / total)) : 0.2;
+  }
+  return { side: c.side === "left" ? "left" : "right", width, columns, auto: c.auto === true };
+}
+// Called by a sidebar about itself, when it starts and whenever it is resized: if a client
+// is showing it and it isn't the configured number of columns wide, it moves its border.
+export function fitColumns(session, block) {
+  const { columns } = sidebarPrefs();
+  if (!columns || !session || !block) return;
+  const size = blockCall(session, block, "size").value;
+  if (!size?.owner || !size.columns) return; // not on screen: the size means nothing
+  const win = findWindow(view(session), { block });
+  const me = win && windowBlocks(win).find((b) => b.block === block);
+  if (!me || me.kind !== "tiled" || !me.rect[2]) return;
+  writeJson(COLS_FILE, { cols: size.columns / me.rect[2], at: Date.now() });
+  if (Math.abs(size.columns - columns) >= 1) fitSidebar(session, win.window_id);
 }
 const sidebarsIn = (win) => windowBlocks(win).filter((b) => labelOf(win, b.block) === LABELS.sidebar);
 function openSidebar(session, win) {
-  const { side, width } = sidebarPrefs(session, win);
+  const { side, width } = sidebarPrefs();
   const tiled = (win.layers ?? []).find((l) => l.kind === "tiled");
   const anchor = tiled?.layout?.split?.split_id ?? tiled?.layout?.block_id;
   if (!anchor) return { ok: false, error: "no tiled pane to split" };
@@ -124,7 +146,7 @@ function openSidebar(session, win) {
 export function fitSidebar(session, windowId) {
   const win = findWindow(view(session), { window: windowId });
   if (!win) return false;
-  const { side, width } = sidebarPrefs(session, win);
+  const { side, width } = sidebarPrefs();
   const right = side === "right";
   const sb = sidebarsIn(win).find((b) => b.kind === "tiled" && b.rect[3] > 0.99 && (right ? b.rect[0] + b.rect[2] > 0.99 : b.rect[0] < 0.01));
   if (!sb) return false;

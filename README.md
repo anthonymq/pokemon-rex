@@ -96,7 +96,10 @@ option is turned off.
 
   `sidebar.side` (`right` or `left`) places the sidebar. Its width is
   `sidebar.columns`, in terminal cells and the same in every tab (30 is slim and
-  still fits everything), or `sidebar.width`, a share of the tab (default 0.25). With `sidebar.auto`, the tab each session is showing always
+  still fits everything), or `sidebar.width`, a share of the tab (default 0.25).
+  Rex only knows a pane's real size while it is on screen, so with `columns` the
+  sidebar measures itself when shown and moves its own border; a sidebar opened
+  in a background tab settles to the exact width when you first look at it. With `sidebar.auto`, the tab each session is showing always
   has it, so it is there whichever session or tab you switch to: the daemon opens
   it, moves it to the configured side and puts it back to the configured width
   when a session appears or shows another tab. Rex's "Autobalance splits" setting

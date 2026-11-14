@@ -7,7 +7,7 @@ import path from "node:path";
 import { shared, setShared, locked, writeJson, ROOT } from "herdr";
 import { game, progress, trainerLevel, liveStreak, projectLabel, nameOf, BADGES, ENCOUNTER_MS } from "../game.js";
 import { agentsSnapshot, notes, sprite, badgeArt, caught, ensureDaemon, openDialog, daemonPid, NOTE_MS, GOTO_FILE } from "../core.js";
-import { api, rex, view, findWindow } from "../rex.js";
+import { api, rex, view, findWindow, fitColumns } from "../rex.js";
 import { C, runApp, clip, len, ago } from "../term.js";
 
 const SESSION = process.env.REX_SESSION;
@@ -324,6 +324,19 @@ export function runSidebar() {
       case "q": app.quit(); break;
     }
   }
-  let ticks = 0;
-  const app = runApp({ render, onEvent, tick: 500, onTick: () => { spin++; if (++ticks % 20 === 0) ensureDaemon(); } });
+  // Keep to the configured width in columns: measured here, because only a pane that is on
+  // screen knows its real size. Checked a moment after each resize, and now and then.
+  let ticks = 0, lastCols = 0, fitAt = 0;
+  const app = runApp({
+    render, onEvent, tick: 500,
+    onTick: (s) => {
+      spin++;
+      if (++ticks % 20 === 0) ensureDaemon();
+      if (s.cols !== lastCols) {
+        lastCols = s.cols;
+        fitAt = ticks + 1;
+      }
+      if (ticks === fitAt || ticks % 10 === 0) { try { fitColumns(SESSION, BLOCK); } catch {} }
+    },
+  });
 }
