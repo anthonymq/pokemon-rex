@@ -78,18 +78,17 @@ export function runSidebar() {
 
     // --- Brand plate: lens, name, status lights, the three bars.
     const anyBlocked = agents.some((a) => a.state === "blocked"), anyWorking = agents.some((a) => a.state === "working");
-    s.image("lens", art("lens"), 1, 0, 8, 4, plain);
-    if (W >= 26) s.image("title", art("title"), 11, 0, 14, 2, plain); // the name at twice the letter size
-    else s.put(11, 1, clip("POKEDEX", W - 12), { fg: C.cream, bold: true });
-    s.put(11, 2, clip("AGENT CONTROL", W - 12), { fg: C.rose });
-    if (W >= 33) {
+    // Two rows: a small lens, the name at twice the letter size, the lights; then the pink rule.
+    s.image("lens", art("lens"), 1, 0, 4, 2, plain);
+    if (W >= 22) s.image("title", art("title"), 6, 0, 14, 2, plain);
+    else s.put(6, 0, clip("POKEDEX", W - 7), { fg: C.cream, bold: true });
+    if (W >= 28) {
       s.image("l1", art(anyBlocked ? "light-yellow" : "light-off"), W - 7, 0, 2, 1, plain);
       s.image("l2", art(anyWorking ? "light-cyan" : "light-off"), W - 5, 0, 2, 1, plain);
       s.image("l3", art("light-lcd"), W - 3, 0, 2, 1, plain);
     }
-    s.put(1, 4, clip("━━━━━━━━━━━ ━━━ ━━━", W - 2), { fg: C.redDark });
-    s.put(0, 5, "▁".repeat(W), { fg: C.pink });
-    let y = 6;
+    s.put(0, 2, "▁".repeat(W), { fg: C.pink });
+    let y = 3;
 
     const header = (title, right, fn, name) => {
       s.image(`h:${name}`, art("light-cyan"), 1, y, 2, 1, plain);
@@ -293,7 +292,7 @@ export function runSidebar() {
 
     if (help) {
       const text = ["h j k l   move between agents", "enter     go to the agent's tab", "p         choose its partner", "s         priority / by session", "d         Kanto Dex", "t         trainer card", "e         wild encounter", "q         close the sidebar"];
-      const hy = Math.max(6, H - 3 - text.length);
+      const hy = Math.max(3, H - 3 - text.length);
       s.fill(0, hy, W, text.length, C.ink, C.soft);
       text.forEach((line, i) => s.put(1, hy + i, clip(line, W - 2), { fg: C.soft }));
     }
