@@ -23,19 +23,28 @@ unchanged.
 
 The five actions are also in the command palette under "Pokedex".
 
-**Sidebar.** Brand plate with the three status lights, the sessions screen
-(`!` an agent needs you, `*` one is done, a spinner while one works), then the
-agents as Pokemon under NEEDS YOU, DONE, WORKING and IDLE, and the trainer strip
-(trainer level, streak, badges). A working agent's Pokemon bobs, a blocked one
-blinks `!`, a done one gets `✦`, an idle one `z`.
+**Sidebar.** Laid out like pokemon-herdr's:
+
+- the brand plate, with the lens and three status lights (yellow: an agent
+  needs you, cyan: one is working);
+- **PROJECTS / SESSIONS**, a dark green screen: each session is a heading band,
+  its tabs are rows under it with a colour square, the partner of the agent in
+  that tab and a mark (`!` needs you, `*` done, a spinner while working). The
+  tab the sidebar is in is highlighted. Click a row to go to that tab;
+- **POKEMON / AGENTS**: the KANTO DEX button with your catch count, then one
+  square tile per agent under NEEDS YOU, DONE, WORKING and IDLE. A working
+  agent's Pokemon bobs, a blocked tile turns amber and blinks `!`, a done one
+  gets `✦`, an idle one `z`;
+- a card for the selected agent: project, level, status, partner, program,
+  time since the last change, its task and XP strip;
+- the trainer strip (trainer level, streak, badges); click it for the trainer card.
 
 | In the sidebar | |
 | --- | --- |
-| `j` `k` or arrows | select an agent |
+| `h` `j` `k` `l` or arrows | select an agent |
 | `enter` or click | go to that agent's tab and focus its pane |
-| `p` | choose the project's partner from your catches (and use stones) |
-| `s` | sort by priority or group by session |
-| `v` | tiles or full cards (task line, status, XP strip, sub-agents) |
+| `p` or right-click | choose the project's partner from your catches (and use stones) |
+| `s` | group agents by priority or by session |
 | `d` `t` `e` | Kanto Dex, trainer card, wild encounter |
 | `?` `q` | help, close |
 
