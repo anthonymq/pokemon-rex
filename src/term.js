@@ -1,7 +1,8 @@
 // A small terminal UI kit: a cell buffer with true color, kitty-graphics pictures placed on
 // cell boxes, keyboard and mouse input, and a redraw loop. No dependencies.
 import fs from "node:fs";
-import { STATE_DIR } from "./herdr.js";
+import path from "node:path";
+import { STATE_DIR, ROOT, readJson } from "./herdr.js";
 import { cropSquare } from "./png.js";
 
 // The Pokedex device palette, from pokemon-herdr's layout.
@@ -11,6 +12,13 @@ export const C = {
   lens: "#298eaa", yellow: "#ffcc67", amber: "#ffd07a", gold: "#e8c35a", flame: "#b4472f", mute: "#819788",
   soft: "#b6c6b8", off: "#6e2930", done: "#b9dc92",
 };
+
+// The pixel font (PxPlus IBM VGA) as pictures: one strip of glyphs per ink, drawn by
+// tools/make_art.py. A glyph has the shape of a terminal cell, so text set with
+// Screen.pixel() lines up with ordinary text.
+export const art = (name) => path.join(ROOT, "assets", "ui", `${name}.png`);
+const FONT = readJson(art("font").replace(/\.png$/, ".json"), { glyphs: "", w: 32, h: 64 });
+const INKS = { cream: C.cream, ink: C.ink, rose: C.rose, lcd: C.lcd, mute: C.mute, band: C.band, flame: C.flame, cyan: C.cyan, amber: C.amber, soft: C.soft };
 
 const rgb = (hex) => `${parseInt(hex.slice(1, 3), 16)};${parseInt(hex.slice(3, 5), 16)};${parseInt(hex.slice(5, 7), 16)}`;
 const ESC = "\x1b";
@@ -123,9 +131,25 @@ export class Screen {
   }
   // A picture over a box of cells. `slot` names the place so a moved picture replaces itself.
   // The art is cropped square around its opaque pixels; `dy` nudges it down by pixels (bobbing).
-  image(slot, file, x, y, cols, rows, { dy = 0, crop = true, min = 40 } = {}) {
+  // `rect` shows one part of the picture instead.
+  image(slot, file, x, y, cols, rows, { dy = 0, crop = true, min = 40, rect = null } = {}) {
     if (x < 0 || y < 0 || x + cols > this.cols || y + rows > this.rows) return;
-    this.wanted.set(slot, { file, x, y, cols, rows, dy, crop: crop ? cropSquare(file, min) : null });
+    this.wanted.set(slot, { file, x, y, cols, rows, dy, crop: rect ?? (crop ? cropSquare(file, min) : null) });
+  }
+  // Text in the pixel font, one picture per letter. `ink` is a palette name; `size` 2 doubles
+  // the letters (two cells by two rows each). Returns the cells used. A letter the font strip
+  // lacks is written as ordinary text.
+  pixel(slot, x, y, text, ink = "cream", size = 1) {
+    const file = art(`font-${ink}`);
+    let i = 0;
+    for (const ch of String(text)) {
+      const at = FONT.glyphs.indexOf(ch), cx = x + i * size;
+      i++;
+      if (ch === " ") continue;
+      if (at < 0) this.put(cx, y, ch, { fg: INKS[ink] ?? C.cream });
+      else this.image(`${slot}:${i}`, file, cx, y, size, size, { rect: { x: at * FONT.w, y: 0, w: FONT.w, h: FONT.h } });
+    }
+    return i * size;
   }
   // A clickable box: `fn(ev)` runs on a mouse press inside it. Later boxes win.
   hit(x, y, w, h, fn) {
@@ -202,7 +226,7 @@ export class Screen {
     return id;
   }
 }
-const sig = (w) => `${w.file}:${w.x}:${w.y}:${w.cols}:${w.rows}:${w.dy}:${w.crop ? `${w.crop.x},${w.crop.y},${w.crop.w}` : ""}`;
+const sig = (w) => `${w.file}:${w.x}:${w.y}:${w.cols}:${w.rows}:${w.dy}:${w.crop ? `${w.crop.x},${w.crop.y},${w.crop.w},${w.crop.h}` : ""}`;
 
 // Turns raw terminal input into events: { key } for keys, { mouse, x, y, button } for presses.
 const KEYS = { "[A": "up", "[B": "down", "[C": "right", "[D": "left", "[H": "home", "[F": "end", "[5~": "pageup", "[6~": "pagedown", "[Z": "shift+tab", OA: "up", OB: "down", OC: "right", OD: "left" };
@@ -264,6 +288,20 @@ export function runApp({ render, onEvent, tick = 500, onTick }) {
     if (error) console.error(error);
     process.exit(code);
   };
+  // POKEDEX_DUMP=<file> [POKEDEX_SIZE=100x34]: draw one frame without a terminal and write it
+  // out as JSON (cells and pictures) for tools/preview.py, which turns it into a PNG.
+  if (process.env.POKEDEX_DUMP) {
+    const [cols, rows] = (process.env.POKEDEX_SIZE ?? "80x24").split("x").map(Number);
+    const fake = new Screen({ columns: cols, rows, write() {} });
+    fake.phase = Number(process.env.POKEDEX_PHASE ?? 0);
+    fake.begin();
+    render(fake);
+    fs.writeFileSync(process.env.POKEDEX_DUMP, JSON.stringify({
+      cols, rows, cells: fake.cells.map((row) => row.map((c) => [c.ch, c.fg, c.bg, c.bold ? 1 : 0])),
+      images: [...fake.wanted.values()],
+    }));
+    process.exit(0);
+  }
   if (!process.stdout.isTTY || !process.stdin.isTTY) {
     console.error("pokedex: this view needs a terminal");
     process.exit(1);

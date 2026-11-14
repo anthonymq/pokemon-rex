@@ -126,10 +126,10 @@ export function runSidebar() {
         s.fill(0, ry, W, 1, C.band, C.lcd);
         s.put(0, ry, "▌", { fg: C.cyan });
         s.put(2, ry, "▣", { fg: line.sess.id === SESSION ? C.cyan : C.mute });
-        s.put(4, ry, clip(label, W - 8 - len(count)), { fg: C.lcd, bold: true });
+        s.pixel(`band:${line.sess.id}`, 4, ry, clip(label, W - 8 - len(count)), "lcd");
         const from = 5 + len(clip(label, W - 8 - len(count)));
         if (W - from - len(count) - 3 > 0) s.put(from, ry, "─".repeat(W - from - len(count) - 3), { fg: C.mute });
-        s.put(W - len(count) - 2, ry, count, { fg: C.lcd, bold: true });
+        s.pixel(`bandn:${line.sess.id}`, W - len(count) - 2, ry, count, "lcd");
         s.hit(0, ry, W, 1, () => show(line.sess.id, null, null));
         return;
       }
@@ -141,7 +141,7 @@ export function runSidebar() {
       if (line.a) s.image(`t:${line.tab.id}`, sprite(line.a.partner), 4, ry, 2, 1);
       const state = line.a?.state;
       const mark = state === "blocked" ? "!" : state === "done" ? "*" : state === "working" ? SPIN[spin % 4] : "";
-      s.put(line.a ? 7 : 4, ry, clip(line.name + (line.more > 0 ? ` +${line.more}` : ""), W - (line.a ? 7 : 4) - 3), { fg: ink, bold: active });
+      s.pixel(`tab:${line.tab.id}`, line.a ? 7 : 4, ry, clip(line.name + (line.more > 0 ? ` +${line.more}` : ""), W - (line.a ? 7 : 4) - 3), active ? "ink" : "lcd");
       if (mark) s.put(W - 3, ry, mark, { fg: active ? C.flame : state === "blocked" ? C.amber : C.cyan, bold: true });
       s.hit(0, ry, W, 1, () => (line.a ? focusAgent(line.a) : show(line.tab.session, line.tab.id, null)));
     });
@@ -158,7 +158,10 @@ export function runSidebar() {
     s.fill(1, y, W - 2, 1, C.lcd, C.ink);
     if (W >= 14) s.image("kanto", art("kanto"), 2, y, 9, 1, plain);
     else s.put(2, y, clip("KANTO DEX", W - 4), { fg: C.ink, bold: true });
-    if (W - 4 - 10 >= len(right)) s.put(W - 2 - len(right), y, right, { fg: C.band });
+    if (W - 4 - 10 >= len(right)) {
+      s.pixel("caught", W - 2 - len(right), y, right.slice(0, -1), "band");
+      s.put(W - 3, y, "›", { fg: C.band });
+    }
     s.hit(1, y, W - 2, 1, () => dialog("collection"));
     y += 2;
 
@@ -204,7 +207,7 @@ export function runSidebar() {
         if (GROUPS.some(([, l]) => l === it.group.label) && W >= len(label) + 5) {
           s.image(`g:${it.group.label}`, art(word), 1, ry, len(it.group.label), 1, plain);
           [...String(it.group.list.length)].forEach((digit, k) => s.image(`g:${it.group.label}:${k}`, art(`digit-${digit}`), 2 + len(it.group.label) + k, ry, 1, 1, plain));
-        } else s.put(1, ry, clip(label, W - 4), { fg: C.rose, bold: true });
+        } else s.pixel(`gl:${it.group.label}`, 1, ry, clip(label, W - 4), "rose");
         const from = 2 + len(clip(label, W - 4));
         if (W - from - 3 > 0) s.put(from, ry, "─".repeat(W - from - 3), { fg: C.pink });
         s.put(W - 2, ry, "›", { fg: C.rose });
@@ -237,12 +240,12 @@ export function runSidebar() {
       s.fill(1, dy, W - 2, 4, C.lcd, C.ink);
       const lv = `Lv${level}`;
       s.fill(1, dy, W - 2, 1, C.green, C.lcd);
-      s.put(2, dy, clip(projectLabel(a.project), W - 5 - len(lv)), { fg: C.lcd, bold: true });
-      s.put(W - 2 - len(lv), dy, lv, { fg: C.lcd, bold: true });
+      s.pixel("d:name", 2, dy, clip(projectLabel(a.project), W - 5 - len(lv)), "lcd");
+      s.pixel("d:lv", W - 2 - len(lv), dy, lv, "lcd");
       const word = fainted ? "FAINTED" : a.failed ? "FAILED" : WORDS[a.state];
       const glyph = a.state === "working" ? SPIN[spin % 4] : a.state === "blocked" ? "!" : a.state === "done" ? "●" : "○";
       s.put(2, dy + 1, glyph, { fg: a.state === "blocked" ? C.flame : C.green, bold: true });
-      s.put(4, dy + 1, clip(word, W - 6), { fg: C.ink, bold: true });
+      s.pixel("d:word", 4, dy + 1, clip(word, W - 6), a.state === "blocked" ? "flame" : "ink");
       const rest = [nameOf(a.partner), a.app, ago(now - a.since)].filter(Boolean).join(" · ");
       if (W - 7 - len(word) > 4) s.put(5 + len(word), dy + 1, clip(rest, W - 7 - len(word)), { fg: C.band });
       const where = a.session !== SESSION ? a.sessionLabel : "";
@@ -272,7 +275,7 @@ export function runSidebar() {
     const chipW = Math.max(6, W - 9);
     s.fill(1, fy, chipW, 1, C.lcd, C.ink);
     const tr = `TR${trainerLevel(g)}`;
-    s.put(2, fy, clip(tr, chipW - 2), { fg: C.ink, bold: true });
+    s.pixel("tr", 2, fy, clip(tr, chipW - 2), "ink");
     const streak = liveStreak(g);
     let x = 3 + len(tr);
     if (x + 4 < chipW) {
@@ -287,7 +290,8 @@ export function runSidebar() {
       x += 2;
     }
     s.hit(1, fy, chipW, 1, () => dialog("trainer"));
-    s.put(W - 7, fy, " Help ", { fg: C.cream, bg: C.redDark, bold: true });
+    s.fill(W - 7, fy, 6, 1, C.redDark, C.cream);
+    s.pixel("help", W - 6, fy, "HELP", "cream");
     s.hit(W - 7, fy, 6, 1, () => { help = !help; });
 
     if (help) {

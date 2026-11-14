@@ -145,6 +145,17 @@ pokedex stop | log             # the daemon
 
 ## Develop
 
+To look at a view without a terminal, dump one frame and turn it into a PNG
+(needs Pillow):
+
+```sh
+POKEDEX_DUMP=/tmp/frame.json POKEDEX_SIZE=100x34 bun bin/pokedex.js collection
+python3 tools/preview.py /tmp/frame.json /tmp/frame.png
+```
+
+`python3 tools/make_art.py` redraws `assets/ui/`: the lens, the lights and the
+pixel-font glyph strips (`font-<ink>.png`, one per colour).
+
 `bun test` runs pokemon-herdr's rule tests against `src/game.js`. `src/herdr.js`
 stands in for Herdr's `herdr` module (`tsconfig.json` maps the import), so
 `game.js` can be replaced by a newer copy from pokemon-herdr as is.
@@ -157,14 +168,16 @@ stands in for Herdr's `herdr` module (`tsconfig.json` maps the import), so
 | `src/core.js` | partners, news, toasts, opening dialogs |
 | `src/rex.js` | `rex` CLI wrappers: views, splits, floating panes |
 | `src/term.js`, `src/png.js` | the TUI kit: cells, kitty pictures, input; sprite cropping |
-| `src/views/` | sidebar, collection, trainer, encounter, toast |
+| `src/views/` | sidebar, collection, trainer, encounter, toast; `chrome.js` is their shared header |
+| `tools/` | `make_art.py` draws the UI art, `preview.py` renders a dumped frame |
 | `init.lua` | Rex actions and keys |
 
 ## Differences from pokemon-herdr
 
 - No window chrome: Rex's own tabs, pane frames and status stay as they are.
-  Only fixed headings use the pixel font (as pictures); names and other live
-  text use the terminal's font.
+  Titles, labels and names are set in the pixel font, as pictures cropped from
+  a strip of glyphs; long running text (tasks, quest goals, footers) uses the
+  terminal's font.
 - `enter` in the sidebar shows the agent's session and tab only when Remote
   Control is on in Rex's settings (Rex takes "show this tab" from outside the
   app only then). With it off, the sidebar remembers the pick and `ctrl+a g`

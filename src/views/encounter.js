@@ -52,28 +52,30 @@ export function runEncounter() {
     s.image("wild", sprite(id), 3, sy, sw, sh, { dy: !result && s.phase ? 5 : 0 });
     const tx = sw + 6, tw = W - tx - 3;
     if (result) {
-      s.put(tx, sy + 1, clip(result.text, tw), { fg: C.ink, bold: true });
+      s.pixel("result", tx, sy + 1, clip(result.text.toUpperCase(), tw), "ink");
       return;
     }
     const left = Math.max(0, Math.ceil((ENCOUNTER_MS - (now - e.at)) / 1000));
-    s.put(tx, 2, s.phase ? "!" : " ", { fg: C.flame, bold: true });
-    s.put(tx + 2, 2, "WILD POKEMON", { fg: C.band, bold: true });
-    s.put(tx, 3, clip(`${nameOf(id).toUpperCase()} APPEARED!`, tw), { fg: C.ink, bold: true });
-    s.put(tx, 5, clip(`Catch ${Math.round(throwRate(e) * 100)}%${e.weak ? ` · weakened ×${e.weak}` : ""}`, tw), { fg: C.band });
+    if (s.phase) s.pixel("bang", tx, 2, "!", "flame");
+    s.pixel("wild", tx + 2, 2, "WILD POKEMON", "band");
+    s.pixel("name", tx, 3, clip(`${nameOf(id).toUpperCase()} APPEARED!`, tw), "ink");
+    s.pixel("odds", tx, 5, clip(`CATCH ${Math.round(throwRate(e) * 100)}%${e.weak ? ` WEAK x${e.weak}` : ""}`, tw), "band");
     let y = 6;
     BALLS.forEach(([ball, label], i) => {
       const n = ball === "poke" ? e.balls : g.bag[ball] ?? 0;
       if (ball !== "poke" && !n) return;
-      const text = ` ${i + 1} ${label} ×${n} ${ball === "poke" ? "" : `${Math.round(throwRate(e, ball) * 100)}% `}`;
-      s.put(tx, y, clip(text, tw), { fg: C.cream, bg: n ? C.green : C.band, bold: true });
+      const text = ` ${i + 1} ${label.toUpperCase()} x${n} ${ball === "poke" ? "" : `${Math.round(throwRate(e, ball) * 100)}% `}`;
+      s.fill(tx, y, Math.min(tw, len(text)), 1, n ? C.green : C.band, C.cream);
+      s.pixel(`ball:${ball}`, tx, y, clip(text, tw), "cream");
       s.hit(tx, y, Math.min(tw, len(text)), 1, () => toss(ball));
       y++;
     });
-    s.put(tx, y, " r Run ", { fg: C.ink, bg: C.lcdDim });
+    s.fill(tx, y, 7, 1, C.lcdDim, C.ink);
+    s.pixel("run", tx, y, " R RUN ", "ink");
     s.hit(tx, y, 7, 1, () => run());
-    if (note) s.put(tx, y + 1, clip(note, tw), { fg: C.flame, bold: true });
+    if (note) s.pixel("note", tx, y + 1, clip(note.toUpperCase(), tw), "flame");
     const late = left <= 10;
-    s.put(tx, H - 3, clip(`${left} s before it flees`, tw), { fg: late ? C.flame : C.band, bold: late });
+    s.pixel("left", tx, H - 3, clip(`${left} S BEFORE IT FLEES`, tw), late ? "flame" : "band");
     s.bar(tx, H - 2, tw, left / (ENCOUNTER_MS / 1000), late ? C.flame : C.gold, C.lcdDim);
   }
   function run() {

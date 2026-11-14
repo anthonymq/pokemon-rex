@@ -66,6 +66,21 @@ def text(name, value, color, scale=4):
     img.save(OUT / f"{name}.png")
 
 
+# Every letter the dialogs may write, in one strip per ink: glyph i sits at x = 32 * i. The
+# terminal crops one glyph out per cell, so any text can be set in the pixel font.
+GLYPHS = "".join(chr(c) for c in range(32, 127)) + "Éé·"
+INKS = {
+    "cream": "#f7eed7", "ink": "#17251f", "rose": "#f3bfba", "lcd": "#d9e8bc", "mute": "#819788",
+    "band": "#355746", "flame": "#b4472f", "cyan": "#71d5df", "amber": "#ffd07a", "soft": "#b6c6b8",
+}
+
+
+def atlas():
+    for name, color in INKS.items():
+        text("font-" + name, GLYPHS, color)
+    (OUT / "font.json").write_text('{"glyphs": %s, "w": 32, "h": 64}\n' % __import__("json").dumps(GLYPHS, ensure_ascii=False))
+
+
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
     lens()
@@ -77,6 +92,7 @@ if __name__ == "__main__":
     text("kanto", "KANTO DEX", INK)
     for word in ["NEEDS YOU", "DONE", "WORKING", "IDLE"]:
         text("group-" + word.lower().replace(" ", "-"), word, ROSE)
+    atlas()
     for digit in "0123456789":
         text("digit-" + digit, digit, ROSE)
     print("wrote", ", ".join(sorted(p.name for p in OUT.glob("*.png"))))
