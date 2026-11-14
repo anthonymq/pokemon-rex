@@ -1,0 +1,298 @@
+// The Pokedex daemon: one per machine. It follows every Rex session's program status
+// (OSC 7501), turns terminals that report into agents, awards XP when a turn ends and
+// writes agents.json for the sidebars to draw.
+import fs from "node:fs";
+import path from "node:path";
+import { writeJson, readJson, locked, shared, setShared, settings, STATE_DIR } from "./herdr.js";
+import { game, levelOf, nameOf, finishTask, finishSubTask, recordCatches, unblocked, projectLabel, PARTNERS } from "./game.js";
+import { AGENTS_FILE, PID_FILE, daemonPid, partnerOf, caught, withSession } from "./core.js";
+import { REX, TERMINAL, rex, api, blockCall, sessions as listSessions, view, windowBlocks, labelOf } from "./rex.js";
+
+const blocks = new Map(); // block id -> { session, records: Map<id, record>, cwd, project, since: {s, at}, subPrev }
+const sessionLabels = new Map();
+const blockInfo = new Map(); // block id -> { window, label }
+const projects = new Map(); // cwd -> project key
+const seen = new Set(); // blocks whose partner was already caught this start
+const log = (...a) => console.log(new Date().toISOString(), ...a);
+
+// A project is the git repo an agent works in, else its folder, else its session.
+function projectFor(cwd, session) {
+  if (!cwd) return sessionLabels.get(session) ?? "rex";
+  if (projects.has(cwd)) return projects.get(cwd);
+  let key = cwd;
+  try {
+    const r = Bun.spawnSync(["git", "rev-parse", "--show-toplevel"], { cwd, stdout: "pipe", stderr: "ignore", timeout: 5000 });
+    const top = r.stdout.toString().trim();
+    if (r.exitCode === 0 && top) key = top;
+  } catch {}
+  projects.set(cwd, key);
+  return key;
+}
+
+function entry(session, block) {
+  let b = blocks.get(block);
+  if (!b) {
+    b = { session, records: new Map(), cwd: null, project: null, since: null, subPrev: {} };
+    blocks.set(block, b);
+  }
+  b.session = session;
+  return b;
+}
+function refreshCwd(b, block, foreground) {
+  const cwd = foreground?.cwd ?? blockCall(b.session, block, "process").value?.foreground?.cwd ?? null;
+  if (cwd && cwd !== b.cwd) {
+    b.cwd = cwd;
+    // An agent keeps the project it started in: `cd` inside a turn shouldn't move its XP.
+    b.project ??= projectFor(cwd, b.session);
+  }
+}
+
+// The root record is the agent; records with an id are its sub-agents.
+const norm = (state) => (state === "done" || state === "error" ? "idle" : state);
+const URGENCY = { blocked: 0, error: 0, done: 1, working: 2, idle: 3 };
+function agentState(b) {
+  const root = b.records.get("");
+  if (root) return root.state;
+  return [...b.records.values()].map((r) => r.state).sort((x, y) => URGENCY[x] - URGENCY[y])[0] ?? "idle";
+}
+
+function track(block, b) {
+  if (!b.records.size) return;
+  const now = Date.now();
+  if (!b.project) refreshCwd(b, block);
+  const project = b.project ?? projectFor(null, b.session);
+  const root = b.records.get("");
+  const app = root?.effective_app ?? root?.app ?? [...b.records.values()].find((r) => r.effective_app)?.effective_app ?? null;
+
+  locked(() => withSession(b.session, () => {
+    // An agent's project gets its partner when the agent first shows up, and catches it.
+    if (!seen.has(block)) {
+      seen.add(block);
+      const id = partnerOf(project);
+      if (shared(PARTNERS)?.[project] === undefined) setShared(PARTNERS, { ...(shared(PARTNERS) ?? {}), [project]: id });
+      if (!caught().includes(id)) recordCatches([id], project);
+    }
+    const s = norm(agentState(b));
+    const prev = b.since;
+    if (prev?.s !== s) {
+      // Done and idle count as one. A working agent going quiet finished a task.
+      if (prev?.s === "working" && s === "idle") {
+        log(`task finished in ${projectLabel(project)} after ${Math.round((now - prev.at) / 1000)}s (${app ?? "?"})`);
+        finishTask(project, partnerOf(project), now - prev.at, app);
+      }
+      if (prev?.s === "blocked") unblocked(project, now - prev.at);
+      b.since = { s, at: now };
+    }
+    // Sub-agents: a child record going from working to idle or done earns the smaller award.
+    for (const [id, r] of b.records) {
+      if (id === "") continue;
+      const before = b.subPrev[id];
+      b.subPrev[id] = r.state;
+      if (before === "working" && (r.state === "idle" || r.state === "done")) finishSubTask(project, partnerOf(project));
+    }
+  }));
+}
+
+let dirty = false;
+function publish() {
+  dirty = false;
+  const agents = [];
+  for (const [block, b] of blocks) {
+    if (!b.records.size) continue;
+    const root = b.records.get("");
+    const project = b.project ?? projectFor(null, b.session);
+    const subs = [...b.records].filter(([id]) => id !== "").map(([id, r]) => ({ id, title: r.title ?? id, state: r.state === "error" ? "blocked" : r.state, msg: r.msg ?? "" }));
+    agents.push({
+      block, session: b.session, sessionLabel: sessionLabels.get(b.session) ?? "", window: blockInfo.get(block)?.window ?? null,
+      label: blockInfo.get(block)?.label ?? "", app: root?.effective_app ?? root?.app ?? "",
+      state: agentState(b) === "error" ? "blocked" : agentState(b), failed: root?.state === "error", kind: root?.kind ?? null,
+      msg: root?.msg ?? "", title: root?.title ?? "", progress: root?.progress ?? null, since: b.since?.at ?? Date.now(),
+      project, partner: partnerOf(project), cwd: b.cwd, subs,
+    });
+  }
+  writeJson(AGENTS_FILE, {
+    at: Date.now(), pid: process.pid, agents,
+    sessions: [...sessionLabels].map(([id, label]) => ({ id, label })),
+    windows: [...windowLabels].map(([id, w]) => ({ id, session: w.session, label: w.label })),
+  });
+  try { syncLabels(agents); } catch (error) { log(`labels failed: ${error}`); }
+}
+// --- Tab names. Rex's own sidebar can't be extended, but it shows each tab's label, so with
+// { "labels": { "enabled": true } } in config.json a tab holding an agent is named after its
+// partner: "Meowth Lv3 · rex". Only tabs still carrying Rex's default name ("Window 1a2b3c4d")
+// or a name we gave are touched; a tab you named yourself is left alone, and a tab whose
+// agents are gone gets its default name back.
+const LABELS_FILE = path.join(STATE_DIR, "labels.json");
+const windowLabels = new Map(); // window id -> { session, label }
+const ours = new Map(Object.entries(readJson(LABELS_FILE, {}))); // window id -> { session, label } we set
+const DEFAULT_LABEL = /^Window [0-9a-f]{8}$/;
+function syncLabels(agents) {
+  const enabled = settings().labels?.enabled === true;
+  const want = new Map();
+  if (enabled) {
+    const g = game();
+    const byWindow = new Map();
+    for (const a of agents) if (a.window) byWindow.set(a.window, [...(byWindow.get(a.window) ?? []), a]);
+    for (const [win, list] of byWindow) {
+      // One name per tab: its most urgent agent's project.
+      const a = list.sort((x, y) => URGENCY[x.state] - URGENCY[y.state] || y.since - x.since)[0];
+      const more = new Set(list.map((x) => x.project)).size - 1;
+      want.set(win, { session: a.session, label: `${nameOf(a.partner)} Lv${levelOf(g.xp[a.project])} · ${projectLabel(a.project)}${more > 0 ? ` +${more}` : ""}`.slice(0, 120) });
+    }
+  }
+  let changed = false;
+  for (const [win, w] of want) {
+    const now = windowLabels.get(win)?.label;
+    if (now === undefined || now === w.label) continue;
+    if (!DEFAULT_LABEL.test(now) && ours.get(win)?.label !== now) continue; // named by the person
+    if (!api(w.session, "session.set_window_label", { window_id: win, label: w.label }).ok) continue;
+    windowLabels.set(win, { session: w.session, label: w.label });
+    ours.set(win, w);
+    changed = true;
+  }
+  for (const [win, o] of ours) {
+    if (want.has(win)) continue;
+    const now = windowLabels.get(win)?.label;
+    // Still our name: give the default back. Renamed since, or closed: just forget it.
+    if (now !== undefined && now === o.label) api(o.session, "session.set_window_label", { window_id: win, label: "" });
+    ours.delete(win);
+    changed = true;
+  }
+  if (changed) writeJson(LABELS_FILE, Object.fromEntries(ours));
+}
+
+const touch = () => {
+  if (dirty) return;
+  dirty = true;
+  setTimeout(publish, 80);
+};
+
+function refreshSession(id) {
+  const v = view(id);
+  if (!v) return;
+  sessionLabels.set(id, v.label ?? "");
+  for (const [win, w] of windowLabels) if (w.session === id) windowLabels.delete(win);
+  for (const win of v.windows ?? []) {
+    windowLabels.set(win.window_id, { session: id, label: win.label ?? "" });
+    for (const b of windowBlocks(win)) blockInfo.set(b.block, { window: win.window_id, label: labelOf(win, b.block) ?? "" });
+  }
+}
+function scan() {
+  for (const s of listSessions()) {
+    sessionLabels.set(s.session_id, s.label ?? "");
+    refreshSession(s.session_id);
+    const list = rex(["block", "ls", "-s", s.session_id, "--json"]).value?.blocks ?? [];
+    for (const blk of list) {
+      if (blk.creator_name !== TERMINAL) continue;
+      const records = blockCall(s.session_id, blk.block_id, "program_status").value?.records ?? [];
+      if (!records.length) continue;
+      const b = entry(s.session_id, blk.block_id);
+      for (const r of records) b.records.set(r.id ?? "", r);
+      track(blk.block_id, b);
+    }
+  }
+  touch();
+}
+
+const pending = new Set();
+function onEvent(ev) {
+  if (ev.type === "session_created") {
+    sessionLabels.set(ev.payload.session.session_id, ev.payload.session.label ?? "");
+    return touch();
+  }
+  if (ev.type === "session_destroyed") {
+    const id = ev.payload.session_id;
+    sessionLabels.delete(id);
+    for (const [block, b] of blocks) if (b.session === id) blocks.delete(block);
+    return touch();
+  }
+  if (ev.type !== "session_event") return;
+  const session = ev.payload.session_id;
+  const inner = ev.payload.event;
+  const p = inner.payload ?? {};
+  switch (inner.type) {
+    case "window_label_changed":
+      windowLabels.set(p.window_id, { session, label: p.label ?? "" });
+      return;
+    case "session_label_changed":
+      sessionLabels.set(session, p.label ?? "");
+      return touch();
+    case "session_view_changed":
+      // Layout changes come in bursts; one look at the view per burst is enough.
+      if (pending.has(session)) return;
+      pending.add(session);
+      setTimeout(() => { pending.delete(session); refreshSession(session); touch(); }, 300);
+      return;
+    case "block_closed":
+      blocks.delete(p.block_id);
+      blockInfo.delete(p.block_id);
+      seen.delete(p.block_id);
+      return touch();
+    case "block_event": {
+      if (p.creator_name !== TERMINAL) return;
+      const block = p.block_id;
+      if (p.name === "process_changed") {
+        const b = blocks.get(block);
+        if (b && p.payload?.foreground?.cwd) refreshCwd(b, block, p.payload.foreground);
+        return;
+      }
+      if (p.name === "program_status_changed") {
+        const b = entry(session, block);
+        b.records.set(p.payload.id ?? "", p.payload.record);
+        track(block, b);
+        return touch();
+      }
+      if (p.name === "program_status_removed") {
+        const b = blocks.get(block);
+        if (!b) return;
+        for (const id of p.payload.ids ?? []) {
+          b.records.delete(id);
+          delete b.subPrev[id];
+        }
+        // A record dropped mid-turn (the program exited) ends the turn without an award.
+        if (!b.records.size) b.since = null;
+        else track(block, b);
+        return touch();
+      }
+    }
+  }
+}
+
+export async function runDaemon() {
+  const other = daemonPid();
+  if (other && other !== process.pid) {
+    console.log(`pokedex daemon already running (pid ${other})`);
+    return;
+  }
+  writeJson(PID_FILE, process.pid);
+  const stop = () => {
+    try { if (daemonPid() === process.pid) fs.unlinkSync(PID_FILE); } catch {}
+    process.exit(0);
+  };
+  process.on("SIGTERM", stop);
+  process.on("SIGINT", stop);
+  log(`pokedex daemon started (pid ${process.pid})`);
+
+  // Follow the event stream for as long as the Rex server answers; reconnect when it restarts.
+  for (;;) {
+    const proc = Bun.spawn([REX, "events", "--all", "--json"], { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
+    blocks.clear();
+    try { scan(); } catch (error) { log(`scan failed: ${error}`); }
+    const decoder = new TextDecoder();
+    let buf = "";
+    for await (const chunk of proc.stdout) {
+      buf += decoder.decode(chunk, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        if (!line.trim()) continue;
+        try { onEvent(JSON.parse(line)); } catch (error) { log(`event failed: ${error}`); }
+      }
+    }
+    await proc.exited;
+    log("event stream ended; retrying in 5 s");
+    writeJson(AGENTS_FILE, { at: Date.now(), pid: process.pid, agents: [], sessions: [] });
+    await Bun.sleep(5000);
+  }
+}
