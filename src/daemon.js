@@ -183,7 +183,14 @@ function refreshSession(id) {
 // shows another tab. Rex doesn't tell the server which session the app is looking at, so
 // every session's current tab is kept ready instead.
 const ensuring = new Map(); // window id -> timer
-function autoSidebar(session, windowId, delay = 400) {
+const fitting = new Map(); // session -> { window, until }: sidebars just opened, still settling
+function refit(session) {
+  const f = fitting.get(session);
+  if (!f) return;
+  if (Date.now() > f.until) return void fitting.delete(session);
+  try { fitSidebar(session, f.window); } catch {}
+}
+function autoSidebar(session, windowId, delay = 0) {
   if (!sidebarPrefs().auto || !session) return;
   const key = windowId ?? session;
   if (ensuring.has(key)) return;
@@ -192,8 +199,13 @@ function autoSidebar(session, windowId, delay = 400) {
     try {
       const r = ensureSidebar(session, windowId);
       if (r.ok === false) log(`sidebar not opened in ${sessionLabels.get(session) ?? session}: ${r.error}`);
-      // Rex may even out the panes just after the split; put the width back once it has.
-      else if (r.value === "opened") for (const ms of [700, 2000]) setTimeout(() => { try { fitSidebar(session, r.window); } catch {} }, ms);
+      // Rex may even out the panes just after the split. For the next three seconds every
+      // layout change in that session puts the width straight back (see session_view_changed),
+      // with a few timed tries in case no change is reported.
+      else if (r.value === "opened") {
+        fitting.set(session, { window: r.window, until: Date.now() + 3000 });
+        for (const ms of [60, 200, 500, 1200]) setTimeout(() => refit(session), ms);
+      }
     } catch (error) {
       log(`sidebar failed: ${error}`);
     }
@@ -246,6 +258,7 @@ function onEvent(ev) {
       autoSidebar(session, p.window_id);
       return;
     case "session_view_changed":
+      refit(session);
       // Layout changes come in bursts; one look at the view per burst is enough.
       if (pending.has(session)) return;
       pending.add(session);

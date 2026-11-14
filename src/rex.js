@@ -146,8 +146,11 @@ export function toggleSidebar(session, target) {
   }
   const r = openSidebar(session, win);
   if (r.ok) {
-    Bun.sleepSync(700);
-    fitSidebar(session, win.window_id);
+    // Rex may even out the panes just after the split; put the width back as soon as it has.
+    for (const ms of [60, 140, 300, 700]) {
+      Bun.sleepSync(ms);
+      fitSidebar(session, win.window_id);
+    }
   }
   return r;
 }
