@@ -2,7 +2,7 @@
 
 **A Pokedex for [Rex](https://www.superlogical.com/rex/docs). Every coding agent in your terminal gets a Pokemon partner, and finishing work is how you fill the Pokedex.**
 
-![The Pokedex sidebar beside two Claude Code panes: six projects, each with a partner Pokemon](docs/sidebar.png)
+![A one-minute tour: partners, XP, an evolution, a wild Snorlax, the Kanto Dex and the trainer card](docs/demo.gif)
 
 Claude Code is porting a town map. Codex is fixing a step counter. Beside them, in a red Kanto Pokedex, Pikachu and Eevee bob along while they work.
 
@@ -120,6 +120,8 @@ On the battle card: `1` Poke Ball, `2` Great Ball, `3` Ultra Ball, `r` run. Or c
 ---
 
 ## The sidebar, top to bottom
+
+![The Pokedex sidebar beside two Claude Code panes: six projects, each with a partner Pokemon](docs/sidebar.png)
 
 - **The brand plate**: the lens and three status lights (yellow when an agent needs you, cyan when one is working).
 - **PROJECTS / SESSIONS**: each session is a heading band, its tabs are rows under it with the partner of the agent in that tab and a mark (`!` needs you, `*` done, a spinner while working). Click a row to go to that tab.
