@@ -15,7 +15,7 @@ unchanged.
 
 | Key | Action | What it opens |
 | --- | --- | --- |
-| `ctrl+a o` | `pokedex_toggle` | The sidebar, a full-height pane on the left of the current tab. Again to close. |
+| `ctrl+a o` | `pokedex_toggle` | The sidebar, a full-height pane on the right of the current tab, a quarter of its width. Again to close. |
 | `ctrl+a g` | `pokedex_jump` | Teleport to the agent you picked in the sidebar, else the one that most needs you (blocked, then done, then working). Works from any pane, with Remote Control off. |
 | `ctrl+a d` | `pokedex_collection` | KANTO DEX, the searchable collection of all 151. |
 | `ctrl+a t` | `pokedex_trainer` | The trainer card: stats, recent catches, badges, quests, bag, partners. |
@@ -86,8 +86,20 @@ option is turned off.
   uses, `agents.json` is the daemon's live list, `config.json` is optional:
 
   ```json
-  { "sounds": { "enabled": false }, "toasts": { "enabled": false } }
+  {
+    "sidebar": { "auto": true, "side": "right", "width": 0.25 },
+    "labels": { "enabled": true },
+    "sounds": { "enabled": false },
+    "toasts": { "enabled": false }
+  }
   ```
+
+  `sidebar.side` (`right` or `left`) and `sidebar.width` (a share of the tab)
+  place the sidebar. With `sidebar.auto`, the tab each session is showing always
+  has it, so it is there whichever session or tab you switch to: the daemon opens
+  it, moves it to the configured side and puts it back to the configured width
+  when a session appears or shows another tab. Rex's "Autobalance splits" setting
+  evens panes out just after a split; the daemon re-applies the width afterwards.
 
 ## Install
 

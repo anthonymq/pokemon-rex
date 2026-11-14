@@ -6,7 +6,7 @@ import path from "node:path";
 import { writeJson, readJson, locked, shared, setShared, settings, STATE_DIR } from "./herdr.js";
 import { game, levelOf, nameOf, finishTask, finishSubTask, recordCatches, unblocked, projectLabel, PARTNERS } from "./game.js";
 import { AGENTS_FILE, PID_FILE, daemonPid, partnerOf, caught, withSession } from "./core.js";
-import { REX, TERMINAL, rex, api, blockCall, sessions as listSessions, view, windowBlocks, labelOf } from "./rex.js";
+import { REX, TERMINAL, rex, api, ensureSidebar, fitSidebar, sidebarPrefs, blockCall, sessions as listSessions, view, windowBlocks, labelOf } from "./rex.js";
 
 const blocks = new Map(); // block id -> { session, records: Map<id, record>, cwd, project, since: {s, at}, subPrev }
 const sessionLabels = new Map();
@@ -177,10 +177,34 @@ function refreshSession(id) {
     for (const b of windowBlocks(win)) blockInfo.set(b.block, { window: win.window_id, label: labelOf(win, b.block) ?? "" });
   }
 }
+// --- The sidebar, always there. With { "sidebar": { "auto": true } } in config.json the tab
+// a session is showing always has the Pokedex pane, so whichever session you switch to has
+// it open. It is checked when the daemon starts, when a session appears and when a session
+// shows another tab. Rex doesn't tell the server which session the app is looking at, so
+// every session's current tab is kept ready instead.
+const ensuring = new Map(); // window id -> timer
+function autoSidebar(session, windowId, delay = 400) {
+  if (!sidebarPrefs().auto || !session) return;
+  const key = windowId ?? session;
+  if (ensuring.has(key)) return;
+  ensuring.set(key, setTimeout(() => {
+    ensuring.delete(key);
+    try {
+      const r = ensureSidebar(session, windowId);
+      if (r.ok === false) log(`sidebar not opened in ${sessionLabels.get(session) ?? session}: ${r.error}`);
+      // Rex may even out the panes just after the split; put the width back once it has.
+      else if (r.value === "opened") for (const ms of [700, 2000]) setTimeout(() => { try { fitSidebar(session, r.window); } catch {} }, ms);
+    } catch (error) {
+      log(`sidebar failed: ${error}`);
+    }
+  }, delay));
+}
+
 function scan() {
   for (const s of listSessions()) {
     sessionLabels.set(s.session_id, s.label ?? "");
     refreshSession(s.session_id);
+    autoSidebar(s.session_id, null, 0);
     const list = rex(["block", "ls", "-s", s.session_id, "--json"]).value?.blocks ?? [];
     for (const blk of list) {
       if (blk.creator_name !== TERMINAL) continue;
@@ -198,6 +222,7 @@ const pending = new Set();
 function onEvent(ev) {
   if (ev.type === "session_created") {
     sessionLabels.set(ev.payload.session.session_id, ev.payload.session.label ?? "");
+    autoSidebar(ev.payload.session.session_id, null, 800); // once its first pane has started
     return touch();
   }
   if (ev.type === "session_destroyed") {
@@ -217,6 +242,9 @@ function onEvent(ev) {
     case "session_label_changed":
       sessionLabels.set(session, p.label ?? "");
       return touch();
+    case "active_window_changed":
+      autoSidebar(session, p.window_id);
+      return;
     case "session_view_changed":
       // Layout changes come in bursts; one look at the view per burst is enough.
       if (pending.has(session)) return;
