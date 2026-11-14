@@ -3,9 +3,10 @@
 // partner), then POKEMON / AGENTS: the KANTO DEX button, a grid of square sprite tiles, a
 // detail card for the selected agent, and the trainer strip.
 import fs from "node:fs";
-import { shared, setShared, locked, writeJson } from "herdr";
+import path from "node:path";
+import { shared, setShared, locked, writeJson, ROOT } from "herdr";
 import { game, progress, trainerLevel, liveStreak, projectLabel, nameOf, BADGES, ENCOUNTER_MS } from "../game.js";
-import { agentsSnapshot, notes, sprite, caught, ensureDaemon, openDialog, daemonPid, NOTE_MS, GOTO_FILE } from "../core.js";
+import { agentsSnapshot, notes, sprite, badgeArt, caught, ensureDaemon, openDialog, daemonPid, NOTE_MS, GOTO_FILE } from "../core.js";
 import { api, rex, view, findWindow } from "../rex.js";
 import { C, runApp, clip, len, ago } from "../term.js";
 
@@ -19,23 +20,10 @@ const MARK = { blocked: "!", done: "✦", idle: "z", working: "" };
 const SQUARES = ["#5fbfb0", "#e58a4a", "#6f8fe6", "#9a7be6", "#d95f8c", "#5fbf77", "#e8c35a"];
 const AUTO_TAB = /^Window [0-9a-f]{8}$|^.+ Lv\d+ · /; // Rex's default name, or one the daemon gave
 
-// The lens, as pixels: two per cell, drawn with half blocks. c cream, L lens blue, B cyan, w glint.
-const LENS = [
-  "..cccc..",
-  ".cLLLLc.",
-  "cLBBBBLc",
-  "cLBwBBLc",
-  "cLBBBBLc",
-  "cLBBBBLc",
-  ".cLLLLc.",
-  "..cccc..",
-];
-const LENS_INK = { ".": C.red, c: C.cream, L: C.lens, B: C.cyan, w: "#edffff" };
-function lens(s, x, y) {
-  for (let r = 0; r < LENS.length; r += 2) {
-    for (let i = 0; i < LENS[r].length; i++) s.put(x + i, y + r / 2, "▀", { fg: LENS_INK[LENS[r][i]], bg: LENS_INK[LENS[r + 1][i]] });
-  }
-}
+// Static art drawn by tools/make_art.py and shown with kitty graphics: the lens, the lights
+// and the headings in the pixel font. A heading image of n letters covers n cells.
+const art = (name) => path.join(ROOT, "assets", "ui", `${name}.png`);
+const plain = { crop: false };
 
 export function runSidebar() {
   ensureDaemon();
@@ -90,21 +78,23 @@ export function runSidebar() {
 
     // --- Brand plate: lens, name, status lights, the three bars.
     const anyBlocked = agents.some((a) => a.state === "blocked"), anyWorking = agents.some((a) => a.state === "working");
-    lens(s, 1, 0);
-    s.put(11, 1, clip("P O K E D E X", W - 12), { fg: C.cream, bold: true });
+    s.image("lens", art("lens"), 1, 0, 8, 4, plain);
+    if (W >= 26) s.image("title", art("title"), 11, 0, 14, 2, plain); // the name at twice the letter size
+    else s.put(11, 1, clip("POKEDEX", W - 12), { fg: C.cream, bold: true });
     s.put(11, 2, clip("AGENT CONTROL", W - 12), { fg: C.rose });
-    if (W >= 32) {
-      s.put(W - 6, 0, "●", { fg: anyBlocked ? C.yellow : C.off });
-      s.put(W - 4, 0, "●", { fg: anyWorking ? C.cyan : C.off });
-      s.put(W - 2, 0, "●", { fg: C.lcd });
+    if (W >= 33) {
+      s.image("l1", art(anyBlocked ? "light-yellow" : "light-off"), W - 7, 0, 2, 1, plain);
+      s.image("l2", art(anyWorking ? "light-cyan" : "light-off"), W - 5, 0, 2, 1, plain);
+      s.image("l3", art("light-lcd"), W - 3, 0, 2, 1, plain);
     }
     s.put(1, 4, clip("━━━━━━━━━━━ ━━━ ━━━", W - 2), { fg: C.redDark });
     s.put(0, 5, "▁".repeat(W), { fg: C.pink });
     let y = 6;
 
-    const header = (title, right, fn) => {
-      s.put(1, y, "●", { fg: C.cyan });
-      s.put(3, y, clip(title, W - 5 - len(right ?? "")), { fg: C.cream, bold: true });
+    const header = (title, right, fn, name) => {
+      s.image(`h:${name}`, art("light-cyan"), 1, y, 2, 1, plain);
+      if (W >= 4 + len(title) + 3) s.image(`ht:${name}`, art(name), 4, y, len(title), 1, plain);
+      else s.put(4, y, clip(title, W - 6 - len(right ?? "")), { fg: C.cream, bold: true });
       if (right) s.put(W - len(right) - 1, y, right, { fg: C.cream });
       if (fn) s.hit(0, y, W, 1, fn);
       y++;
@@ -113,7 +103,7 @@ export function runSidebar() {
     const detailRows = agents.length ? 5 : 0;
 
     // --- PROJECTS / SESSIONS: the dark green screen.
-    header("PROJECTS / SESSIONS");
+    header("PROJECTS / SESSIONS", null, null, "projects");
     const lines = [];
     for (const sess of snap.sessions) {
       const tabs = (snap.windows ?? []).filter((w) => w.session === sess.id);
@@ -162,12 +152,13 @@ export function runSidebar() {
     y++;
 
     // --- POKEMON / AGENTS.
-    header("POKÉMON / AGENTS", sort() === "grouped" ? "≡" : "◷", () => toggleSort());
+    header("POKÉMON / AGENTS", sort() === "grouped" ? "≡" : "◷", () => toggleSort(), "agents");
     y++;
     const have = caught().length;
     const right = `Caught ${have} / 151 ›`;
     s.fill(1, y, W - 2, 1, C.lcd, C.ink);
-    s.put(2, y, clip("KANTO DEX", W - 4), { fg: C.ink, bold: true });
+    if (W >= 14) s.image("kanto", art("kanto"), 2, y, 9, 1, plain);
+    else s.put(2, y, clip("KANTO DEX", W - 4), { fg: C.ink, bold: true });
     if (W - 4 - 10 >= len(right)) s.put(W - 2 - len(right), y, right, { fg: C.band });
     s.hit(1, y, W - 2, 1, () => dialog("collection"));
     y += 2;
@@ -208,7 +199,13 @@ export function runSidebar() {
       if (ry < top || ry + it.h > bottom) continue;
       if (it.kind === "label") {
         const label = `${it.group.label} ${it.group.list.length}`;
-        s.put(1, ry, clip(label, W - 4), { fg: C.rose, bold: true });
+        const word = `group-${it.group.label.toLowerCase().replace(/ /g, "-")}`;
+        // The four status words and the count's digits are pixel-font pictures; a session name
+        // (when grouped by session) is ordinary text.
+        if (GROUPS.some(([, l]) => l === it.group.label) && W >= len(label) + 5) {
+          s.image(`g:${it.group.label}`, art(word), 1, ry, len(it.group.label), 1, plain);
+          [...String(it.group.list.length)].forEach((digit, k) => s.image(`g:${it.group.label}:${k}`, art(`digit-${digit}`), 2 + len(it.group.label) + k, ry, 1, 1, plain));
+        } else s.put(1, ry, clip(label, W - 4), { fg: C.rose, bold: true });
         const from = 2 + len(clip(label, W - 4));
         if (W - from - 3 > 0) s.put(from, ry, "─".repeat(W - from - 3), { fg: C.pink });
         s.put(W - 2, ry, "›", { fg: C.rose });
@@ -285,8 +282,9 @@ export function runSidebar() {
     }
     for (const b of BADGES.filter((b) => !b.rank)) {
       if (x + 1 >= chipW) break;
-      const got = g.badges.includes(b.id);
-      s.put(x, fy, got ? "●" : "○", { fg: got ? C.flame : C.lcdDim, bold: got });
+      // An earned badge shows its art; a locked one is an empty socket.
+      if (g.badges.includes(b.id)) s.image(`badge:${b.id}`, badgeArt(b.id), x, fy, 2, 1, plain);
+      else s.put(x, fy, "○", { fg: C.lcdDim });
       x += 2;
     }
     s.hit(1, fy, chipW, 1, () => dialog("trainer"));

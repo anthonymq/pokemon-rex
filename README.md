@@ -26,7 +26,9 @@ The five actions are also in the command palette under "Pokedex".
 **Sidebar.** Laid out like pokemon-herdr's:
 
 - the brand plate, with the lens and three status lights (yellow: an agent
-  needs you, cyan: one is working);
+  needs you, cyan: one is working). The lens, the lights, the badges and the
+  headings in the PxPlus IBM VGA pixel font are pictures (kitty graphics), not
+  characters; `python3 tools/make_art.py` redraws them into `assets/ui/`;
 - **PROJECTS / SESSIONS**, a dark green screen: each session is a heading band,
   its tabs are rows under it with a colour square, the partner of the agent in
   that tab and a mark (`!` needs you, `*` done, a spinner while working). The
@@ -149,7 +151,8 @@ stands in for Herdr's `herdr` module (`tsconfig.json` maps the import), so
 ## Differences from pokemon-herdr
 
 - No window chrome: Rex's own tabs, pane frames and status stay as they are.
-  There are no pixel fonts; the terminal's font is used.
+  Only fixed headings use the pixel font (as pictures); names and other live
+  text use the terminal's font.
 - `enter` in the sidebar shows the agent's session and tab only when Remote
   Control is on in Rex's settings (Rex takes "show this tab" from outside the
   app only then). With it off, the sidebar remembers the pick and `ctrl+a g`

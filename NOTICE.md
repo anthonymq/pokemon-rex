@@ -14,3 +14,8 @@ That license does not cover the artwork:
   come from the PokeAPI sprites repository by way of pokemon-herdr. This
   package grants no rights to Pokemon artwork or names.
 - `assets/sounds/` holds pokemon-herdr's two synthesized jingles, not game audio.
+- `assets/fonts/PxPlus_IBM_VGA_8x16.ttf` is the PxPlus IBM VGA font from the
+  Ultimate Oldschool PC Font Pack (VileR), CC BY-SA 4.0; its terms are in
+  `assets/fonts/LICENSE-PxPlus.txt`. The headings in `assets/ui/` are rendered
+  from it by `tools/make_art.py` and carry the same license. The lens and the
+  lights in `assets/ui/` are drawn by that script.
