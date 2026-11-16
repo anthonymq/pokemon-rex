@@ -3,7 +3,7 @@
 import { POKEMON } from "../pokemon.js";
 import { game, projectLabel, nameOf, itemsFor, ITEMS, progress } from "../game.js";
 import { caught, partnerOf, sprite } from "../core.js";
-import { call } from "../client.js";
+import { call, shareOnX } from "../client.js";
 import { C, runApp, clip, len } from "../term.js";
 import { plate } from "./chrome.js";
 
@@ -104,7 +104,7 @@ export function runCollection(args) {
     }
     s.fill(0, H - 1, W, 1, C.red, C.cream);
     s.put(2, H - 1, clip(foot, W - 24), { fg: C.cream });
-    s.put(W - 21, H - 1, project ? "type to search" : "tab filter · type", { fg: C.rose });
+    s.put(W - 21, H - 1, project ? "type to search" : "^S share · tab filter", { fg: C.rose });
   }
 
   function choose() {
@@ -130,6 +130,12 @@ export function runCollection(args) {
       case "home": return move(0);
       case "end": return move(items.length - 1);
       case "tab": return void (project || (only = !only));
+      case "ctrl+s":
+        message = "Opening X...";
+        return void shareOnX().then(
+          (copied) => { message = copied ? "Card copied: paste it into the post (⌘V)" : "X opened; the card couldn't be copied"; },
+          (error) => { message = `Share failed: ${error.message}`; },
+        );
       case "enter": return choose();
       case "backspace": return void (query = query.slice(0, -1));
     }

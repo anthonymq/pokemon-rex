@@ -5,7 +5,7 @@ import path from "node:path";
 import os from "node:os";
 import { shared, STATE_DIR, readJson } from "../src/herdr.js";
 import { game, levelOf, trainerLevel, liveStreak, nameOf, projectLabel, CAUGHT, GAME, PARTNERS } from "../src/game.js";
-import { call, connect, loadState, serverDir } from "../src/client.js";
+import { call, connect, loadState, serverDir, shareOnX } from "../src/client.js";
 import { agentsSnapshot, caught, daemonPid, ensureDaemon, openDialog, LOG_FILE } from "../src/core.js";
 import { toggleSidebar } from "../src/rex.js";
 
@@ -116,6 +116,15 @@ switch (cmd) {
     console.log(pid ? `stopped daemon ${pid}` : "daemon not running");
     break;
   }
+  case "share": {
+    try {
+      const copied = await shareOnX();
+      console.log(copied ? "X compose opened; the card is on the clipboard, paste it into the post" : "X compose opened; the card couldn't be copied");
+    } catch (error) {
+      need({ ok: false, error: error.message });
+    }
+    break;
+  }
   case "log": console.log(fs.existsSync(LOG_FILE) ? fs.readFileSync(LOG_FILE, "utf8").split("\n").slice(-40).join("\n") : "no log yet"); break;
 
   // Brings progress over from pokemon-herdr: the same keys, read from Herdr's shared.json.
@@ -142,6 +151,7 @@ switch (cmd) {
   pokedex open encounter     the waiting wild Pokemon
   pokedex status             daemon, trainer and agents, as text
   pokedex catch <n> | release <n>
+  pokedex share              post progress on X (card image on the clipboard)
   pokedex import-herdr [shared.json] [--force]
   pokedex stop | log         the background daemon
 

@@ -257,6 +257,7 @@ export function parseInput(data) {
       else if (code === 127 || code === 8) events.push({ key: "backspace" });
       else if (code === 3) events.push({ key: "ctrl+c" });
       else if (code === 4) events.push({ key: "ctrl+d" });
+      else if (code === 19) events.push({ key: "ctrl+s" });
       else if (code >= 32) events.push({ key: ch, char: ch });
       s = s.slice(ch.length);
     }

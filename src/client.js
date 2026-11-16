@@ -5,7 +5,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { STATE_DIR, settings, setRemote } from "./herdr.js";
+import { ROOT, STATE_DIR, settings, setRemote } from "./herdr.js";
 
 const port = () => Number(process.env.POKEDEX_PORT) || settings().server?.port || 7151;
 const base = () => `http://127.0.0.1:${port()}`;
@@ -28,6 +28,19 @@ export function startServer() {
   const log = fs.openSync(path.join(STATE_DIR, "server.log"), "a");
   Bun.spawn([process.execPath, path.join(dir, "bin", "pokedex-agents-server.js")], { stdout: log, stderr: log, stdin: "ignore", cwd: dir }).unref();
   return true;
+}
+
+// Shares progress on X: the server puts the card image on the clipboard, and X's compose
+// window opens with the post's text. Resolves with whether the card was copied.
+export async function shareOnX() {
+  const r = await (await fetch(`${base()}/share`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sprites: path.join(ROOT, "assets", "pokemon") }),
+  })).json();
+  if (!r.ok) throw new Error(r.error);
+  Bun.spawn(["open", r.url], { stdout: "ignore", stderr: "ignore" }).unref();
+  return r.copied;
 }
 
 async function post(session, action, args) {

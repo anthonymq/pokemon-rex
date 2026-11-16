@@ -2,11 +2,12 @@
 import { shared } from "herdr";
 import { game, progress, trainerLevel, liveStreak, projectLabel, nameOf, quests, BADGES, ITEMS, PARTNERS } from "../game.js";
 import { caught, sprite, badgeArt } from "../core.js";
+import { shareOnX } from "../client.js";
 import { C, runApp, clip, len } from "../term.js";
 import { plate, section } from "./chrome.js";
 
 export function runTrainer() {
-  let scroll = 0;
+  let scroll = 0, message = "";
   function render(s) {
     const W = s.cols, H = s.rows;
     const g = game();
@@ -75,7 +76,7 @@ export function runTrainer() {
     y++;
     const partners = shared(PARTNERS) ?? {};
     const rows = Object.entries(g.xp).sort((a, b) => b[1] - a[1]);
-    const room = Math.max(0, Math.floor((H - y) / 2));
+    const room = Math.max(0, Math.floor((H - 1 - y) / 2));
     scroll = Math.max(0, Math.min(scroll, Math.max(0, rows.length - room)));
     if (!rows.length) s.put(2, y, clip("No partner has earned XP yet. Finish an agent task.", W - 4), { fg: C.soft });
     rows.slice(scroll, scroll + room).forEach(([project, xp], i) => {
@@ -93,11 +94,21 @@ export function runTrainer() {
       s.pixel(`pl:${project}`, 31 + barW + 1, ry, lv, "lcd");
       s.put(31, ry + 1, `${xp} XP${g.fainted[project] ? " · fainted" : ""}`, { fg: C.soft });
     });
+    s.fill(0, H - 1, W, 1, C.red, C.cream);
+    s.put(2, H - 1, clip(message || "s share on X · j/k scroll · q close", W - 4), { fg: C.cream });
+  }
+  function share() {
+    message = "Opening X...";
+    shareOnX().then(
+      (copied) => { message = copied ? "Card copied: paste it into the post (⌘V)" : "X opened; the card couldn't be copied"; },
+      (error) => { message = `Share failed: ${error.message}`; },
+    );
   }
   function onEvent(ev) {
     if (ev.wheel) scroll = Math.max(0, scroll + ev.wheel);
     if (ev.key === "down" || ev.key === "j") scroll++;
     if (ev.key === "up" || ev.key === "k") scroll = Math.max(0, scroll - 1);
+    if (ev.key === "s" || ev.key === "ctrl+s") share();
     if (ev.key === "escape" || ev.key === "q" || ev.key === "enter") app.quit();
   }
   const app = runApp({ render, onEvent });
