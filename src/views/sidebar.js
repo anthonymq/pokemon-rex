@@ -6,9 +6,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { shared, writeJson, remoteState, ROOT } from "herdr";
 import { call } from "../client.js";
-import { game, partyOf, progress, trainerLevel, liveStreak, projectLabel, nameOf, BADGES, WILD_MAX } from "../game.js";
+import { game, partyOf, progress, trainerLevel, projectLabel, savedKey, nameOf, BADGES, WILD_MAX } from "../game.js";
 import { needsExplainer } from "./party.js";
-import { agentsSnapshot, notes, sprite, badgeArt, caught, ensureDaemon, openDialog, daemonPid, wildNow, NOTE_MS, GOTO_FILE } from "../core.js";
+import { agentsSnapshot, notes, sprite, badgeArt, caught, ensureDaemon, openDialog, daemonPid, wildNow, streakNow, rulesMismatch, NOTE_MS, GOTO_FILE } from "../core.js";
 import { api, rex, view, findWindow, fitColumns } from "../rex.js";
 import { C, runApp, clip, len, ago } from "../term.js";
 
@@ -216,7 +216,7 @@ export function runSidebar() {
         continue;
       }
       const a = it.a, on = a === selected;
-      const fainted = !!g.fainted[a.project];
+      const fainted = !!g.fainted[savedKey(a.project)];
       const mark = a.state === "working" ? SPIN[spin % 4] : fainted ? "x" : a.state === "blocked" ? (s.phase ? "!" : " ") : MARK[a.state];
       // The selected tile is brighter with a dark frame line under it; a blocked one glows amber.
       const bg = on ? C.cream : a.state === "blocked" ? C.amber : C.lcd;
@@ -238,7 +238,7 @@ export function runSidebar() {
     if (selected && detailRows) {
       const dy = bottom + 1;
       const a = selected;
-      const fainted = !!g.fainted[a.project];
+      const fainted = !!g.fainted[savedKey(a.project)];
       s.fill(1, dy, W - 2, 4, C.lcd, C.ink);
       s.fill(1, dy, W - 2, 1, C.green, C.lcd);
       s.pixel("d:name", 2, dy, clip(projectLabel(a.project), W - 4), "lcd");
@@ -284,12 +284,14 @@ export function runSidebar() {
 
     // --- Footer: the trainer strip on an LCD chip, and a help button.
     s.put(0, H - 2, "▁".repeat(W), { fg: C.redDark });
+    // The server runs other rules than this copy: what's drawn from them may be off until it's synced.
+    if (rulesMismatch() !== null) s.put(1, H - 2, clip("rules differ from the server: run scripts/sync-game.sh", W - 2), { fg: C.amber, bg: C.redDark, bold: true });
     const fy = H - 1;
     const chipW = Math.max(6, W - 9);
     s.fill(1, fy, chipW, 1, C.lcd, C.ink);
     const tr = `TR${trainerLevel(g)}`;
     s.pixel("tr", 2, fy, clip(tr, chipW - 2), "ink");
-    const streak = liveStreak(g);
+    const streak = streakNow(g);
     let x = 3 + len(tr);
     if (x + 4 < chipW) {
       s.put(x, fy, `▲${streak}`, { fg: streak ? C.flame : C.band, bold: !!streak });

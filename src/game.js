@@ -16,13 +16,23 @@ import { shared, setShared, notify, playSound, settings } from "herdr";
 import { POKEMON as DEX } from "./pokemon.js";
 
 export const nameOf = (id) => DEX[id - 1]?.name ?? `#${id}`;
-export const projectLabel = (key) => String(key).split(/[/\\]/).filter(Boolean).pop() ?? String(key);
+// A project's short name: the label kept on this machine for a key in the save (a hash), else the
+// last path segment of a readable key.
+export const projectLabel = (key) => shared(LABELS)?.[key] ?? String(key).split(/[/\\]/).filter(Boolean).pop() ?? String(key);
 
 export const GAME = "pokedex.game";
 export const CAUGHT = "pokedex.caught";
 export const PARTNERS = "pokedex.partners";
-export const PROJECTS = "pokedex.projects"; // space name -> project key, filled by pokedex-agents
+// Project keys in the save are hashes (the server makes them from readable keys with a secret kept on
+// this machine), so the save never holds repo paths or space names. Three maps stay on this machine,
+// outside the save: PROJECTS (a Herdr space name -> its readable key, the repo root), KEYS (a readable
+// key -> its key in the save) and LABELS (a key in the save -> the project's short name).
+export const PROJECTS = "pokedex.projects";
+export const KEYS = "pokedex.keys";
+export const LABELS = "pokedex.labels";
 export const projectKey = (name) => shared(PROJECTS)?.[name] ?? name;
+// The save's key for a project an app knows by `name` (a space name or a repo path).
+export const savedKey = (name) => { const key = projectKey(name); return shared(KEYS)?.[key] ?? key; };
 export const SUBTASK_XP = 10;
 export const ENCOUNTER_CHANCE = 0.15;
 export const OPTIONS = "pokedex.options";
@@ -126,6 +136,9 @@ export function game() {
 //   4 -> 5: active-day streaks (the streak and its best carry over, with a Streak Freeze per 7 active
 //           days already recorded, up to 2); no tutorial for a save that already played.
 export const SAVE_VERSION = 5;
+// The rules' version: bump it with any change to what the rules compute, so an app whose copy of
+// this file is older or newer than the server's can say so (the server sends it with the state).
+export const RULES_VERSION = 1;
 const MIGRATIONS = {
   1: (g) => ({ ...g, stats: g.stats ?? blankStats() }),
   2: (g) => ({ ...g, wild: g.wild ?? (g.encounter ? [g.encounter] : []), fainted: {}, happy: g.happy ?? {} }),
@@ -752,7 +765,8 @@ export function finishTask(project, partnerId, ms, app = null, branch = null) {
   if (firstToday) rest(g, today);
   // Back after a while: one summary of what waits and what happened, before this turn's news.
   if (g.lastTurn && Date.now() - g.lastTurn >= AWAY_MS) digest(g);
-  g.lastTurn = Date.now();
+  // A turn replayed from an app's queue may be older than the last one counted.
+  g.lastTurn = Math.max(g.lastTurn ?? 0, Date.now());
   g.tasks += 1;
   tally(g, "turns");
   if (ms >= 10 * 60000) tally(g, "long");

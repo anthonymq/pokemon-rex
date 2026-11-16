@@ -4,9 +4,9 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { shared, STATE_DIR, readJson } from "../src/herdr.js";
-import { game, partyOf, trainerLevel, liveStreak, nameOf, projectLabel, options, CAUGHT, GAME, GIFTS, PARTNERS, WILD_MAX } from "../src/game.js";
-import { call, connect, loadState, serverDir, shareOnX } from "../src/client.js";
-import { agentsSnapshot, caught, daemonPid, ensureDaemon, openDialog, wildNow, LOG_FILE } from "../src/core.js";
+import { game, partyOf, trainerLevel, nameOf, projectLabel, options, CAUGHT, GAME, GIFTS, PARTNERS, WILD_MAX, RULES_VERSION } from "../src/game.js";
+import { call, connect, loadState, serverDir, shareOnX, OUTBOX } from "../src/client.js";
+import { agentsSnapshot, caught, daemonPid, ensureDaemon, openDialog, wildNow, streakNow, rulesMismatch, LOG_FILE } from "../src/core.js";
 import { toggleSidebar } from "../src/rex.js";
 
 const [cmd = "help", ...args] = process.argv.slice(2);
@@ -87,7 +87,11 @@ switch (cmd) {
     console.log(`daemon    ${pid ? `running (pid ${pid})` : "not running"}`);
     console.log(`state     ${STATE_DIR}`);
     console.log(`server    ${serverDir() ?? "not installed"}`);
-    console.log(`trainer   Lv ${trainerLevel(g)} (${g.lifetime} XP) · caught ${caught().length}/151 · tasks ${g.tasks} + ${g.subtasks} sub · streak ${liveStreak(g)}d (best ${g.streak.best})`);
+    const other = rulesMismatch();
+    if (other !== null) console.log(`rules     the server runs rules v${other}, this copy v${RULES_VERSION}: run scripts/sync-game.sh`);
+    const queued = readJson(OUTBOX, []).length;
+    if (queued) console.log(`queued    ${queued} agent report${queued > 1 ? "s" : ""} waiting for the server`);
+    console.log(`trainer   Lv ${trainerLevel(g)} (${g.lifetime} XP) · caught ${caught().length}/151 · tasks ${g.tasks} + ${g.subtasks} sub · streak ${streakNow(g)}d (best ${g.streak.best})`);
     console.log(`badges    ${g.badges.join(", ") || "none"}`);
     console.log(`options   ${optionsLine()}`);
     const wild = wildNow(g);

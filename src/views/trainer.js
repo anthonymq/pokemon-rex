@@ -4,8 +4,8 @@
 // The look matches pokemon-herdr's card: a red frame around one dark screen, sections on tonal bands
 // instead of light slabs, amber for what's best (the lead, Gold quests, shinies).
 import { remoteState } from "herdr";
-import { game, partyOf, progress, liveStreak, nameOf, quests, options, BADGES, ITEMS, GIFTS, DAYCARE, TUTORIAL, TIERS } from "../game.js";
-import { caught, sprite, badgeArt } from "../core.js";
+import { game, partyOf, progress, nameOf, options, BADGES, ITEMS, GIFTS, DAYCARE, TUTORIAL, TIERS } from "../game.js";
+import { caught, sprite, badgeArt, questsNow, streakNow } from "../core.js";
 import { call, shareOnX } from "../client.js";
 import { C, runApp, clip, len } from "../term.js";
 import { plate } from "./chrome.js";
@@ -52,7 +52,7 @@ export function runTrainer() {
     const facts = [
       ["CAUGHT", `${have.length}/151`, g.shiny.length ? `${g.shiny.length} shiny` : ""],
       ["TASKS", String(g.tasks), g.subtasks ? `+${g.subtasks} sub` : ""],
-      ["STREAK", `${liveStreak(g)}d`, `best ${g.streak.best}d`, freezes ? `${freezes} freeze${freezes > 1 ? "s" : ""}` : ""],
+      ["STREAK", `${streakNow(g)}d`, `best ${g.streak.best}d`, freezes ? `${freezes} freeze${freezes > 1 ? "s" : ""}` : ""],
       ["WILD", `${g.encounters.caught}/${g.encounters.seen}`, g.encounters.fled ? `${g.encounters.fled} fled` : ""],
     ];
     // A fact's `extra` (the streak's freezes) sits on the value row, after the value.
@@ -70,7 +70,7 @@ export function runTrainer() {
 
     // Today's quests and this week's: the tier reached in its colour, the goal for the next tier,
     // what it pays and the count. A daily quest with no tier yet can be rerolled (1-3, or a click).
-    const qs = quests(g);
+    const qs = questsNow(g);
     if (room(qs.length + 1)) {
       heading(s, "h:quests", X, y, "QUESTS");
       qs.forEach((q, i) => {
@@ -202,7 +202,7 @@ export function runTrainer() {
     if (ev.key === "p") open(g.party.length ? "party" : "starter");
     if (ev.key === "c" && !g.party.length) open("starter");
     if (ev.key === "g" && g.gifts.pending.length) open("gift");
-    const q = ["1", "2", "3"].includes(ev.key) ? quests(g)[Number(ev.key) - 1] : null;
+    const q = ["1", "2", "3"].includes(ev.key) ? questsNow(g)[Number(ev.key) - 1] : null;
     if (q?.rerollable) reroll(q);
     if (ev.key === "s" || ev.key === "ctrl+s") share();
     if (ev.key === "escape" || ev.key === "q" || ev.key === "enter") app.quit();

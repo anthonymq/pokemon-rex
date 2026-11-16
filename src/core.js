@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ROOT, STATE_DIR, readJson, settings, shared, remoteState } from "./herdr.js";
-import { PARTNERS, CAUGHT, ENCOUNTER_MS, projectLabel, shouldAlert, defaultPartner as basePartner } from "./game.js";
+import { PARTNERS, CAUGHT, ENCOUNTER_MS, RULES_VERSION, projectLabel, savedKey, quests, liveStreak, shouldAlert, defaultPartner as basePartner } from "./game.js";
 import { BUN, CLI, LABELS, view, findWindow, windowBlocks, labelOf, openFloat, api } from "./rex.js";
 
 export const AGENTS_FILE = path.join(STATE_DIR, "agents.json");
@@ -26,11 +26,20 @@ export function defaultPartner(key) {
   const legacy = LEGACY_POKEMON[(hash >>> 0) % LEGACY_POKEMON.length];
   return basePartner(legacy <= 151 ? legacy : (hash >>> 0) % 151 + 1);
 }
+// `key` is the project as Rex knows it (its repo path); the save keys it by a hash (savedKey).
 export function partnerOf(key) {
-  const saved = shared(PARTNERS)?.[key];
+  const saved = shared(PARTNERS)?.[savedKey(key)];
   return Number.isInteger(saved) && saved >= 1 && saved <= 151 ? saved : defaultPartner(key);
 }
-export const hasPartner = (key) => shared(PARTNERS)?.[key] !== undefined;
+export const hasPartner = (key) => shared(PARTNERS)?.[savedKey(key)] !== undefined;
+
+// What the server computed from its clock (today's quests, the live streak): drawn as sent, so an
+// older or newer copy of the rules here never shows different ones. An older server sends none.
+export const serverView = () => remoteState()?.view ?? null;
+export const questsNow = (g) => serverView()?.quests ?? quests(g);
+export const streakNow = (g) => serverView()?.streak ?? liveStreak(g);
+// The server's rules version when it differs from this copy's (time to run scripts/sync-game.sh).
+export const rulesMismatch = () => { const v = serverView(); return v && v.rules !== RULES_VERSION ? v.rules : null; };
 export const caught = () => shared(CAUGHT) ?? [];
 
 export const agentsSnapshot = () => readJson(AGENTS_FILE, { at: 0, agents: [], sessions: [] });

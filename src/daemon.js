@@ -5,8 +5,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { writeJson, readJson, shared, settings, STATE_DIR } from "./herdr.js";
 import { nameOf, projectLabel, PARTNERS } from "./game.js";
-import { AGENTS_FILE, PID_FILE, daemonPid, partnerOf, showNote } from "./core.js";
-import { connect, sendFrom } from "./client.js";
+import { AGENTS_FILE, PID_FILE, daemonPid, partnerOf, hasPartner, showNote } from "./core.js";
+import { connect, sendFrom, flushOutbox } from "./client.js";
 import { REX, TERMINAL, rex, api, ensureSidebar, fitSidebar, sidebarPrefs, blockCall, sessions as listSessions, view, windowBlocks, labelOf } from "./rex.js";
 
 const blocks = new Map(); // block id -> { session, records: Map<id, record>, cwd, project, since: {s, at}, subPrev, turn: {at, head} }
@@ -110,7 +110,7 @@ function track(block, b) {
     // An agent's project gets its mascot when the agent first shows up (it isn't caught for free).
     if (!seen.has(block)) {
       seen.add(block);
-      if (shared(PARTNERS)?.[project] === undefined) send("savePartners", { [project]: partnerOf(project) });
+      if (!hasPartner(project)) send("savePartners", { [project]: partnerOf(project) });
     }
     const s = norm(agentState(b));
     const prev = b.since;
@@ -384,6 +384,9 @@ export async function runDaemon() {
     }
   };
   if (!(await connect({ onState }))) log("Pokedex server not reachable yet; still trying");
+  // Reports queued while the server was out of reach go out once it's back.
+  flushOutbox();
+  setInterval(() => flushOutbox(), 30000);
 
   // Follow the event stream for as long as the Rex server answers; reconnect when it restarts.
   for (;;) {

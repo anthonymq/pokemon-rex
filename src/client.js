@@ -43,11 +43,11 @@ export async function shareOnX() {
   return r.copied;
 }
 
-async function post(session, action, args) {
+async function post(session, action, args, at) {
   const res = await fetch(`${base()}/call`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ action, args, origin: "rex", session }),
+    body: JSON.stringify({ action, args, origin: "rex", session, ...(at ? { at } : {}) }),
   });
   return res.json();
 }
@@ -83,9 +83,52 @@ export async function loadState() {
   }
 }
 export const call = (action, ...args) => callFrom(process.env.REX_SESSION, action, ...args);
-// For changes nobody waits on: a failure is logged, not thrown.
+
+// --- What agents did, kept when the server can't be reached. Each report carries when it happened;
+// one the server can't take now waits in OUTBOX and is sent later, oldest first (the server counts it
+// on its own day). A report never overtakes an older one still waiting, so a commit follows its turn.
+const EVENTS = new Set(["taskFinished", "subTaskFinished", "unblocked", "result"]);
+export const OUTBOX = path.join(STATE_DIR, "outbox.json");
+const outbox = () => { try { return JSON.parse(fs.readFileSync(OUTBOX, "utf8")); } catch { return []; } };
+const keep = (box) => (box.length ? fs.writeFileSync(OUTBOX, JSON.stringify(box)) : fs.rmSync(OUTBOX, { force: true }));
+let flushing = null;
+// Sends what waits, oldest first, until it's all sent or the server is still out of reach.
+export function flushOutbox() {
+  flushing ??= (async () => {
+    for (let box = outbox(); box.length; box = outbox()) {
+      const e = box[0];
+      let r;
+      try { r = await post(e.session, e.action, e.args, e.at); } catch { return; }
+      if (!r.ok) console.error(`pokedex: queued ${e.action} refused: ${r.error}`);
+      keep(outbox().slice(1));
+    }
+  })().finally(() => { flushing = null; });
+  return flushing;
+}
+async function report(session, action, args) {
+  const e = { session: session || null, action, args, at: Date.now() };
+  await flushOutbox();
+  if (outbox().length) return void keep([...outbox(), e]);
+  for (let tries = 0; ; tries++) {
+    let r;
+    try {
+      r = await post(e.session, action, args, e.at);
+    } catch {
+      // Out of reach: start it, wait a few seconds, then keep the report for later.
+      if (tries === 0) startServer();
+      if (tries >= 20) return void keep([...outbox(), e]);
+      await Bun.sleep(200);
+      continue;
+    }
+    if (!r.ok) throw new Error(r.error); // the server answered no
+    return r.value;
+  }
+}
+// For changes nobody waits on: a failure is logged, not thrown. Agent reports are queued while the
+// server is out of reach.
 export const sendFrom = (session, action, ...args) =>
-  callFrom(session, action, ...args).catch((error) => console.error(`pokedex: ${action} failed: ${error.message}`));
+  (EVENTS.has(action) ? report(session, action, args) : callFrom(session, action, ...args))
+    .catch((error) => console.error(`pokedex: ${action} failed: ${error.message}`));
 
 // Follows /events for as long as the process lives, reconnecting (and starting the server) when
 // it goes away. `onState` sees each state. Resolves true once the first state is in, false if
