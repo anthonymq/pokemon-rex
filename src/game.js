@@ -2,7 +2,8 @@
 // pokedex-trainer and pokedex-encounter. Mods can't import across folders, so each keeps a copy;
 // edit mods/pokedex-agents/game.js and run scripts/sync-game.sh (the repo checks the copies match).
 // State lives in shared("pokedex.game"):
-// { xp: {project: n}, tasks, subtasks, evolutions, streak: {last, days, best}, badges: [ids], shiny: [ids],
+// { party: [ids] (the first leads), pokemon: {id: xp}, lifetime, bank, gifts: {got, pending}, results: {project: [kinds]},
+//   seen: [keys], tasks, subtasks, evolutions, streak: {last, days, best}, badges: [ids], shiny: [ids],
 //   wild: [{id, at, balls, weak, project}] (the tall grass queue, oldest first), encounter: wild[0] | null,
 //   encounters: {seen, caught, fled}, recent: [{id, at}], bag: {item: n}, dex: {id: {at, project, how}},
 //   fainted: {project: true}, happy: {project: true}, quests: {day, week, d, w}, lastTurn,
@@ -44,8 +45,8 @@ function jingle(name) {
 }
 const LEGENDARY = [144, 145, 146, 150, 151];
 
-// A finished turn earns 10 XP plus 5 per full minute it ran, up to 100.
-export const taskXp = (ms) => 10 + 5 * Math.min(18, Math.floor(Math.max(0, ms) / 60000));
+// A finished turn earns 10 XP plus 5 per full minute it ran, up to 50: results pay the rest.
+export const taskXp = (ms) => 10 + 5 * Math.min(8, Math.floor(Math.max(0, ms) / 60000));
 
 // Gen 1 level evolutions: from -> [to, level].
 const EVOLVE = {
@@ -98,7 +99,11 @@ export const BADGES = [
 export function game() {
   const g = shared(GAME) ?? {};
   return {
-    xp: g.xp ?? {}, tasks: g.tasks ?? 0, subtasks: g.subtasks ?? 0, evolutions: g.evolutions ?? 0,
+    party: g.party ?? [], pokemon: g.pokemon ?? {}, lifetime: g.lifetime ?? 0, bank: g.bank ?? 0,
+    gifts: g.gifts ?? { got: [], pending: [] }, results: g.results ?? {},
+    // A brand-new save has nothing to explain: the Phase 2 explainer is for migrated saves.
+    seen: g.seen ?? (Object.keys(g).length ? [] : ["phase2"]),
+    tasks: g.tasks ?? 0, subtasks: g.subtasks ?? 0, evolutions: g.evolutions ?? 0,
     streak: g.streak ?? { last: null, days: 0, best: 0 },
     badges: g.badges ?? [], shiny: g.shiny ?? [],
     wild: g.wild ?? (g.encounter ? [g.encounter] : []), encounter: g.wild?.[0] ?? g.encounter ?? null,
@@ -114,10 +119,12 @@ export function game() {
 // and after an import or a merge. A save newer than these rules is left alone.
 //   1 -> 2: local stats.
 //   2 -> 3: the tall grass queue (the waiting encounter joins it); fainting became hard mode only.
-export const SAVE_VERSION = 3;
+//   3 -> 4: one party instead of a partner per project (see fromProjects).
+export const SAVE_VERSION = 4;
 const MIGRATIONS = {
   1: (g) => ({ ...g, stats: g.stats ?? blankStats() }),
   2: (g) => ({ ...g, wild: g.wild ?? (g.encounter ? [g.encounter] : []), fainted: {}, happy: g.happy ?? {} }),
+  3: (g) => fromProjects(g),
 };
 // Writes the game; `encounter` mirrors the head of the queue for views that show one Pokemon.
 function put(g) {
@@ -172,6 +179,29 @@ export function migrateSave() {
   return v;
 }
 
+// Per-project partners become one party. Every partner joins the Pokedex and keeps its project's XP
+// (summed when several projects share one); the six with the most XP form the party, the top one
+// leading; lifetime XP is the sum, so the trainer level carries over (its gifts come with the next
+// XP). Partners stay as mascots.
+function fromProjects(g) {
+  const partners = shared(PARTNERS) ?? {};
+  const pokemon = { ...(g.pokemon ?? {}) };
+  for (const [project, xp] of Object.entries(g.xp ?? {})) {
+    const id = partners[project];
+    if (id) pokemon[id] = (pokemon[id] ?? 0) + xp;
+  }
+  const ids = [...new Set(Object.values(partners))];
+  const caught = shared(CAUGHT) ?? [];
+  const fresh = ids.filter((id) => !caught.includes(id));
+  if (fresh.length) setShared(CAUGHT, [...caught, ...fresh].sort((x, y) => x - y));
+  const at = Date.now();
+  const dex = { ...(g.dex ?? {}), ...Object.fromEntries(fresh.map((id) => [id, { at, project: null, how: "partner" }])) };
+  const party = Object.entries(pokemon).sort(([, x], [, y]) => y - x).map(([id]) => +id).slice(0, PARTY_MAX);
+  const { xp, ...rest } = g;
+  const lifetime = Object.values(xp ?? {}).reduce((s, n) => s + n, 0);
+  return { ...rest, pokemon, party, dex, lifetime, bank: 0, gifts: { got: [], pending: [] }, results: {}, seen: [] };
+}
+
 // --- Local stats, for pacing and (later) goals sized to the player's own median.
 const STATS_DAYS = 90; // days kept
 const STATS_LENGTHS = 200; // recent turn lengths kept for the median
@@ -209,7 +239,8 @@ export function progress(xp) {
   const lo = 4 * level ** 2, hi = 4 * (level + 1) ** 2;
   return { level, into: Math.min(1, Math.max(0, ((xp ?? 0) - lo) / (hi - lo))) };
 }
-export const trainerLevel = (g) => Object.values(g.xp).reduce((sum, xp) => sum + levelOf(xp), 0);
+// The trainer level grows with lifetime XP, the same however many projects earned it.
+export const trainerLevel = (g) => Math.max(1, Math.floor(Math.sqrt((g.lifetime ?? 0) / 40)));
 // True when the streak's last day is yesterday, or only a weekend lies between it and today:
 // weekends never break a streak.
 function streakAlive(last, now = new Date()) {
@@ -344,68 +375,178 @@ export function recordCatches(ids, project = null) {
   if (fresh.length) save(g);
 }
 
-// Moves a project's XP and partner to a new key (a space renamed, or the key scheme changing).
+// Moves a project's mascot to a new key (a space renamed, or the key scheme changing).
 export function migrateProject(from, to) {
   if (from === to) return;
-  const g = game();
   const partners = shared(PARTNERS) ?? {};
-  if (g.xp[from] !== undefined) {
-    const { [from]: moved, ...rest } = g.xp;
-    g.xp = { ...rest, [to]: (rest[to] ?? 0) + moved };
-    put(g);
-  }
   if (partners[from] !== undefined) {
     const { [from]: partner, ...rest } = partners;
     setShared(PARTNERS, { ...rest, [to]: rest[to] ?? partner });
   }
 }
 
-// A partner changes form: it joins the Pokedex, counts for badges and quests, and plays the jingle. Mutates g.
-function evolve(g, project, from, to, detail) {
+// --- The party: up to PARTY_MAX Pokemon from the Pokedex, the first one leading. Every XP award goes
+// to the lead, whatever the project; the rest of the party gets DAYCARE of it. A project's entry in
+// PARTNERS is only its mascot, drawn on its cards.
+export const PARTY_MAX = 6;
+export const DAYCARE = 0.25;
+export const STARTERS = [1, 4, 7];
+export const partyOf = (g = game()) => g.party.map((id) => ({ id, xp: g.pokemon[id] ?? 0, level: levelOf(g.pokemon[id]) }));
+export const lead = (g = game()) => g.party[0] ?? null;
+
+// A party member changes form, keeping its XP: it joins the Pokedex, counts for badges and quests,
+// and plays the jingle. Mutates g.
+function evolve(g, from, to, detail) {
   g.evolutions += 1;
-  setShared(PARTNERS, { ...(shared(PARTNERS) ?? {}), [project]: to });
-  addCaught(g, [to], "evolved", project);
+  const { [from]: xp, ...rest } = g.pokemon;
+  g.pokemon = { ...rest, [to]: Math.max(xp ?? 0, rest[to] ?? 0) };
+  g.party = [...new Set(g.party.map((id) => (id === from ? to : id)))];
+  addCaught(g, [to], "evolved", null);
   bump(g, (c) => { c.evolutions += 1; });
   jingle("evolve");
-  notify({ title: `What? ${nameOf(from)} is evolving!`, body: `${projectLabel(project)}'s partner became ${nameOf(to)}${detail}.`, level: "success", icon: `mods/pokedex-agents/pokemon/${to}.png` });
+  notify({ title: `What? ${nameOf(from)} is evolving!`, body: `${nameOf(from)} became ${nameOf(to)}${detail}.`, level: "success", icon: `mods/pokedex-agents/pokemon/${to}.png` });
 }
 
-// XP to a project's partner, with level-up and evolution news. Mutates g; true when it evolved.
-function award(g, project, partnerId, amount) {
-  // A project's first XP saves its partner, so every view (the trainer card too) shows the same one.
-  if ((shared(PARTNERS) ?? {})[project] === undefined) setShared(PARTNERS, { ...(shared(PARTNERS) ?? {}), [project]: partnerId });
-  const before = levelOf(g.xp[project]);
-  g.xp = { ...g.xp, [project]: (g.xp[project] ?? 0) + amount };
-  const after = levelOf(g.xp[project]);
+// XP to one Pokemon, with level-up and evolution news. Mutates g; true when it evolved.
+function grow(g, id, amount) {
+  const before = levelOf(g.pokemon[id]);
+  g.pokemon = { ...g.pokemon, [id]: (g.pokemon[id] ?? 0) + amount };
+  const after = levelOf(g.pokemon[id]);
   // Evolve as many stages as the new level allows.
-  let id = partnerId;
-  while (EVOLVE[id] && after >= EVOLVE[id][1]) id = EVOLVE[id][0];
-  if (id !== partnerId) {
-    evolve(g, project, partnerId, id, ` (Lv ${after})`);
+  let to = id;
+  while (EVOLVE[to] && after >= EVOLVE[to][1]) to = EVOLVE[to][0];
+  if (to !== id) {
+    evolve(g, id, to, ` (Lv ${after})`);
     return true;
   }
   if (after > before) remember(g, "levels");
   if (Math.floor(after / LEVEL_NEWS_EVERY) > Math.floor(before / LEVEL_NEWS_EVERY)) {
-    notify({ title: `${nameOf(partnerId)} reached Lv ${after}!`, body: projectLabel(project), level: "info", icon: `mods/pokedex-agents/pokemon/${partnerId}.png`, quiet: true });
+    notify({ title: `${nameOf(id)} reached Lv ${after}!`, body: id === g.party[0] ? "Your lead partner" : "Day Care", level: "info", icon: `mods/pokedex-agents/pokemon/${id}.png`, quiet: true });
   }
   return false;
 }
 
-// The items a partner can evolve with, and how many of each the bag holds.
-export function itemsFor(partnerId, g = game()) {
-  return Object.entries(ITEM_EVOLVE[partnerId] ?? {}).map(([item, to]) => ({ item, to, have: g.bag[item] ?? 0 }));
+// XP earned by the trainer: it counts toward the trainer level, goes to the lead and (DAYCARE of it)
+// to the rest of the party. Before a starter is chosen it waits in `bank` for it. Mutates g; true when
+// something evolved.
+function award(g, amount) {
+  if (amount <= 0) return false;
+  g.lifetime += amount;
+  gifts(g);
+  if (!g.party.length) {
+    g.bank += amount;
+    return false;
+  }
+  let evolved = false;
+  for (const [i, id] of [...g.party].entries()) if (grow(g, id, i === 0 ? amount : Math.round(amount * DAYCARE))) evolved = true;
+  return evolved;
 }
 
-// Uses a stone or Link Cable on a project's partner. Returns the new Pokemon, or null when it can't.
-export function useItem(project, item) {
+// The first choice: Bulbasaur, Charmander or Squirtle leads the party, with any XP earned before it.
+export function chooseStarter(id) {
   const g = game();
-  const from = (shared(PARTNERS) ?? {})[project];
-  const to = ITEM_EVOLVE[from]?.[item];
-  if (!to || !(g.bag[item] > 0)) return null;
+  if (g.party.length) throw new Error("the starter is already chosen");
+  if (!STARTERS.includes(id)) throw new Error("the starter is Bulbasaur (1), Charmander (4) or Squirtle (7)");
+  addCaught(g, [id], "starter", null);
+  g.party = [id];
+  const bank = g.bank;
+  g.bank = 0;
+  const evolved = grow(g, id, bank);
+  save(g, evolved);
+  return id;
+}
+
+// A new party, in order (the first leads): 1 to PARTY_MAX different Pokemon from the Pokedex.
+export function setParty(ids) {
+  const caught = shared(CAUGHT) ?? [];
+  if (!Array.isArray(ids) || !ids.length || ids.length > PARTY_MAX || new Set(ids).size !== ids.length) throw new Error(`a party is 1 to ${PARTY_MAX} different Pokemon`);
+  const missing = ids.find((id) => !caught.includes(id));
+  if (missing) throw new Error(`${nameOf(missing)} isn't in your Pokedex`);
+  put({ ...game(), party: ids });
+  return ids;
+}
+// Puts a Pokemon from the Pokedex at the head of the party (the previous lead stays in it, room allowing).
+export const setLead = (id) => setParty([id, ...game().party.filter((x) => x !== id)].slice(0, PARTY_MAX));
+
+// Marks a one-time screen ("phase2": the New Pokedex explainer) as seen.
+export function markSeen(key) {
+  const g = game();
+  if (!g.seen.includes(key)) put({ ...g, seen: [...g.seen, key] });
+}
+
+// --- Gifts at trainer levels, the same for everyone. One with several `ids` waits for a choice.
+export const GIFTS = [
+  { tr: 5, ids: [133] }, { tr: 10, ids: [131] }, { tr: 15, ids: [138, 140] }, { tr: 20, ids: [106, 107] }, { tr: 30, ids: [137] },
+];
+// Grants every gift the trainer level reached; choices go to g.gifts.pending. Mutates g.
+function gifts(g) {
+  const tr = trainerLevel(g);
+  for (const gift of GIFTS) {
+    if (gift.tr > tr || g.gifts.got.includes(gift.tr) || g.gifts.pending.includes(gift.tr)) continue;
+    if (gift.ids.length > 1) {
+      g.gifts = { ...g.gifts, pending: [...g.gifts.pending, gift.tr] };
+      notify({ title: `Trainer Lv ${gift.tr}: a gift is waiting!`, body: `Choose ${gift.ids.map(nameOf).join(" or ")}.`, level: "success" });
+    } else {
+      g.gifts = { ...g.gifts, got: [...g.gifts.got, gift.tr] };
+      addCaught(g, gift.ids, "gift", null);
+      notify({ title: `Trainer Lv ${gift.tr}: you received ${nameOf(gift.ids[0])}!`, body: "A gift for your progress.", level: "success", icon: `mods/pokedex-agents/pokemon/${gift.ids[0]}.png` });
+    }
+  }
+}
+// Takes a waiting gift: `id` is one of its choices.
+export function claimGift(tr, id) {
+  const g = game();
+  const gift = GIFTS.find((x) => x.tr === tr);
+  if (!gift || !g.gifts.pending.includes(tr)) throw new Error("no gift waiting at that trainer level");
+  if (!gift.ids.includes(id)) throw new Error(`choose ${gift.ids.map(nameOf).join(" or ")}`);
+  g.gifts = { got: [...g.gifts.got, tr], pending: g.gifts.pending.filter((x) => x !== tr) };
+  addCaught(g, [id], "gift", null);
+  save(g);
+  return id;
+}
+
+// The items a Pokemon can evolve with, and how many of each the bag holds.
+export function itemsFor(id, g = game()) {
+  return Object.entries(ITEM_EVOLVE[id] ?? {}).map(([item, to]) => ({ item, to, have: g.bag[item] ?? 0 }));
+}
+
+// Uses a stone or Link Cable on a party member. Returns the new Pokemon, or null when it can't.
+export function useItem(id, item) {
+  const g = game();
+  const to = ITEM_EVOLVE[id]?.[item];
+  if (!g.party.includes(id) || !to || !(g.bag[item] > 0)) return null;
   g.bag = { ...g.bag, [item]: g.bag[item] - 1 };
-  evolve(g, project, from, to, ` with a ${ITEMS[item].name}`);
+  evolve(g, id, to, ` with a ${ITEMS[item].name}`);
   save(g, true);
   return to;
+}
+
+// --- Results: what a turn produced, reported by the client after it. Each kind pays once per turn
+// and project, scaled like the turn itself by the day's diminishing returns.
+export const RESULT_XP = { commit: 20, green: 30, merged: 50 };
+export function result(project, kind) {
+  if (!RESULT_XP[kind]) throw new Error(`a result is one of ${Object.keys(RESULT_XP).join(", ")}`);
+  const g = game();
+  const done = g.results[project];
+  if (!done || done.includes(kind)) return null;
+  g.results = { ...g.results, [project]: [...done, kind] };
+  const evolved = award(g, Math.round(RESULT_XP[kind] * dailyRate(g)));
+  // A merge also finds something rare.
+  if (kind === "merged") {
+    gain(g, "ultra");
+    remember(g, "items", "ultra");
+  }
+  save(g, evolved);
+  return kind;
+}
+
+// --- Daily diminishing returns, the same in 1 repo or 10: the day's turns 1-5 pay in full, 6-20 40%,
+// 21-50 10%, the rest 3%. Tuned with scripts/simulate.js (the roadmap's 20/50 tiers let the pro reach
+// Lv100 in under 3 weeks once all XP goes to one lead).
+export const DAILY_RATES = [[5, 1], [20, 0.4], [50, 0.1], [Infinity, 0.03]];
+function dailyRate(g) {
+  const n = g.stats.days[day(new Date())]?.turns ?? 0;
+  return DAILY_RATES.find(([upTo]) => n <= upTo)[1];
 }
 
 // The base form of a Pokemon's evolution line (Charizard -> Charmander).
@@ -415,7 +556,6 @@ export function baseOf(id) {
   return id;
 }
 // A default partner, from whatever a client hashed: always a base form, never a legendary.
-const STARTERS = [1, 4, 7];
 export const defaultPartner = (id) => (LEGENDARY.includes(id) ? STARTERS[id % 3] : baseOf(id));
 
 // An agent stopped needing the person after `ms`. A quick answer counts for a quest and makes the
@@ -456,6 +596,8 @@ export function finishTask(project, partnerId, ms, app = null) {
   g.tasks += 1;
   tally(g, "turns");
   tally(g, "ms", Math.max(0, ms));
+  // This turn's results (a commit, green tests, a merge) may follow it.
+  g.results = { ...g.results, [project]: [] };
   g.stats = {
     days: Object.fromEntries(Object.entries(g.stats.days).filter(([k]) => k >= day(new Date(Date.now() - STATS_DAYS * 86400000)))),
     lengths: [...g.stats.lengths, Math.max(0, ms)].slice(-STATS_LENGTHS),
@@ -470,7 +612,7 @@ export function finishTask(project, partnerId, ms, app = null) {
     const happy = !!g.happy[project];
     const { [project]: _, ...rest } = g.happy;
     g.happy = rest;
-    evolved = award(g, project, partnerId, Math.round(taskXp(ms) * (happy ? 1 + HAPPY_BONUS : 1)));
+    evolved = award(g, Math.round(taskXp(ms) * (happy ? 1 + HAPPY_BONUS : 1) * dailyRate(g)));
   }
 
   // Long turns pay out in items.
@@ -522,7 +664,7 @@ export function finishTask(project, partnerId, ms, app = null) {
 export function finishSubTask(project, partnerId) {
   const g = game();
   g.subtasks += 1;
-  save(g, g.fainted[project] ? false : award(g, project, partnerId, SUBTASK_XP));
+  save(g, g.fainted[project] ? false : award(g, Math.round(SUBTASK_XP * dailyRate(g))));
 }
 
 // One ball at a waiting Pokemon (`index` in the queue, the oldest by default): "caught", "missed",

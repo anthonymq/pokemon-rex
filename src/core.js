@@ -1,4 +1,4 @@
-// What every pokedex process shares besides the rules: partners, sprites, news, the daemon.
+// What every pokedex process shares besides the rules: mascots, sprites, news, the daemon.
 import fs from "node:fs";
 import path from "node:path";
 import { ROOT, STATE_DIR, readJson, settings, shared, remoteState } from "./herdr.js";
@@ -14,7 +14,8 @@ export const NOTE_MS = 7000;
 export const sprite = (id) => path.join(ROOT, "assets", "pokemon", `${id}.png`);
 export const badgeArt = (id) => path.join(ROOT, "assets", "badges", `${id}.png`);
 
-// A project's partner: the saved one, else the default pokemon-herdr picks from the name.
+// A project's mascot (PARTNERS, drawn on its cards): the saved one, else the default
+// pokemon-herdr picks from the name.
 // The 40-entry legacy pool is kept as is, so progress imported from Herdr keeps its partners;
 // the server's defaultPartner() then makes it a base form, as savePartners stores it.
 const LEGACY_POKEMON = [1, 4, 7, 10, 16, 25, 35, 39, 52, 54, 60, 63, 74, 77, 79, 92, 104, 113, 133, 147, 152, 155, 158, 175, 179, 194, 200, 216, 220, 231, 252, 255, 258, 280, 300, 311, 312, 393, 390, 387];

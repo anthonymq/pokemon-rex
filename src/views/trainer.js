@@ -1,16 +1,25 @@
-// The trainer card: stats, recent catches, badges, quests, the bag and every partner by XP.
-import { shared } from "herdr";
-import { game, progress, trainerLevel, liveStreak, projectLabel, nameOf, quests, options, BADGES, ITEMS, PARTNERS } from "../game.js";
+// The trainer card: stats, recent catches, badges, quests, the bag and the party. It also hosts
+// the starter choice, the New Pokedex explainer, waiting gifts and the party editor (party.js).
+import { remoteState } from "herdr";
+import { game, partyOf, progress, liveStreak, nameOf, quests, options, BADGES, ITEMS, GIFTS, DAYCARE } from "../game.js";
 import { caught, sprite, badgeArt } from "../core.js";
 import { shareOnX } from "../client.js";
 import { C, runApp, clip, len } from "../term.js";
 import { plate, section } from "./chrome.js";
+import { makeScreen, firstScreen, trainerProgress } from "./party.js";
 
 export function runTrainer() {
-  let scroll = 0, message = "";
+  let message = "", screen; // undefined until the first state arrives, then null (the card) or a screen
+  const open = (name, note = "") => {
+    screen = name ? makeScreen(name, { quit: () => app.quit(), done: open }) : null;
+    if (note) message = note;
+  };
   function render(s) {
+    if (screen === undefined && remoteState()) open(firstScreen(game()));
+    if (screen) return screen.render(s);
     const W = s.cols, H = s.rows;
     const g = game();
+    const { tr, next } = trainerProgress(g);
     const have = caught();
     s.fill(0, 0, W, H, C.green, C.lcd);
     let y = plate(s, "TRAINER CARD", () => app.quit()) + 1;
@@ -18,7 +27,7 @@ export function runTrainer() {
     // Two rows of four stats, each on its own band.
     const seen = g.encounters.seen;
     const stats = [
-      ["TRAINER LV", trainerLevel(g)], ["CAUGHT", `${have.length}/151`], ["TASKS", `${g.tasks}+${g.subtasks} sub`], ["STREAK", `${liveStreak(g)}d best ${g.streak.best}`],
+      ["TRAINER LV", `${tr} · ${g.lifetime}/${next} XP`], ["CAUGHT", `${have.length}/151`], ["TASKS", `${g.tasks}+${g.subtasks} sub`], ["STREAK", `${liveStreak(g)}d best ${g.streak.best}`],
       ["ENCOUNTERS", seen], ["WILD CATCHES", g.encounters.caught], ["FLED", g.encounters.fled], ["CATCH RATE", seen ? `${Math.round((g.encounters.caught / seen) * 100)}%` : "-"],
     ];
     const sw = Math.floor((W - 2) / 4);
@@ -71,32 +80,39 @@ export function runTrainer() {
     });
     y += 6;
 
-    // Every partner, by XP.
-    section(s, "h:partners", 2, y, "PARTNERS", W - 4);
+    // The party, two columns: the lead earns every task's XP, the Day Care a share of it.
+    section(s, "h:party", 2, y, "PARTY", W - 4);
+    const gift = GIFTS.find((x) => x.tr === g.gifts.pending[0]);
+    const right = gift ? `A gift is waiting: ${gift.ids.map(nameOf).join(" or ")} · g` : `p change · Day Care ${Math.round(DAYCARE * 100)}%`;
+    s.put(W - 2 - len(right), y, right, { fg: gift ? C.amber : C.soft, bold: !!gift });
+    if (gift) s.hit(W - 2 - len(right), y, len(right), 1, () => open("gift"));
     y++;
-    const partners = shared(PARTNERS) ?? {};
-    const rows = Object.entries(g.xp).sort((a, b) => b[1] - a[1]);
-    const room = Math.max(0, Math.floor((H - 1 - y) / 2));
-    scroll = Math.max(0, Math.min(scroll, Math.max(0, rows.length - room)));
-    if (!rows.length) s.put(2, y, clip("No partner has earned XP yet. Finish an agent task.", W - 4), { fg: C.soft });
-    rows.slice(scroll, scroll + room).forEach(([project, xp], i) => {
-      const ry = y + i * 2, id = partners[project];
-      const { level, into } = progress(xp);
-      if (id) {
-        s.fill(2, ry, 4, 2, C.lcd, C.ink);
-        s.image(`x:${project}`, sprite(id), 2, ry, 4, 2);
-      }
-      s.pixel(`pn:${project}`, 7, ry, clip(projectLabel(project), 22), "lcd");
-      s.put(7, ry + 1, clip(id ? nameOf(id) : "?", 22), { fg: C.soft });
-      const lv = `LV ${level}`;
-      const barW = Math.max(4, W - 32 - len(lv) - 3);
-      s.bar(31, ry, barW, into, C.cyan, C.band);
-      s.pixel(`pl:${project}`, 31 + barW + 1, ry, lv, "lcd");
-      s.put(31, ry + 1, `${xp} XP${g.fainted[project] ? " · fainted" : ""}`, { fg: C.soft });
+    const party = partyOf(g);
+    if (!party.length) {
+      s.fill(2, y, W - 4, 2, C.amber, C.ink);
+      s.put(3, y, clip("Choose your starter: Bulbasaur, Charmander or Squirtle · c", W - 6), { fg: C.ink, bold: true });
+      s.put(3, y + 1, clip(g.bank ? `${g.bank} XP is waiting for it.` : "It leads your party and earns your agents' XP.", W - 6), { fg: C.band });
+      s.hit(2, y, W - 4, 2, () => open("starter"));
+    }
+    const colW = Math.floor((W - 4) / 2);
+    party.forEach((p, i) => {
+      const x = 2 + (i % 2) * colW, ry = y + Math.floor(i / 2) * 2;
+      if (ry + 2 > H - 1) return;
+      const { into } = progress(p.xp);
+      s.fill(x, ry, 4, 2, i === 0 ? C.cream : C.lcd, C.ink);
+      s.image(`x:${i}:${p.id}`, sprite(p.id), x, ry, 4, 2);
+      s.pixel(`pn:${i}`, x + 5, ry, clip(nameOf(p.id).toUpperCase(), 14), "lcd");
+      s.put(x + 5, ry + 1, clip(i === 0 ? "lead" : "Day Care", 14), { fg: i === 0 ? C.amber : C.soft });
+      const lv = `LV ${p.level}`;
+      const barW = Math.max(4, colW - 22 - len(lv) - 2);
+      s.bar(x + 20, ry, barW, into, C.cyan, C.band);
+      s.pixel(`pl:${i}`, x + 21 + barW, ry, lv, "lcd");
+      s.put(x + 20, ry + 1, `${p.xp} XP`, { fg: C.soft });
+      s.hit(x, ry, colW - 1, 2, () => open("party"));
     });
     s.fill(0, H - 1, W, 1, C.red, C.cream);
     const o = options();
-    s.put(2, H - 1, clip(message || `s share on X · j/k scroll · q close · alert ${o.alert} · hard mode ${o.hardMode ? "on" : "off"} (pokedex set)`, W - 4), { fg: C.cream });
+    s.put(2, H - 1, clip(message || `${party.length ? "p party" : "c starter"} · s share on X · q close · alert ${o.alert} · hard mode ${o.hardMode ? "on" : "off"} (pokedex set)`, W - 4), { fg: C.cream });
   }
   function share() {
     message = "Opening X...";
@@ -106,9 +122,12 @@ export function runTrainer() {
     );
   }
   function onEvent(ev) {
-    if (ev.wheel) scroll = Math.max(0, scroll + ev.wheel);
-    if (ev.key === "down" || ev.key === "j") scroll++;
-    if (ev.key === "up" || ev.key === "k") scroll = Math.max(0, scroll - 1);
+    if (screen) return screen.onEvent(ev);
+    message = "";
+    const g = game();
+    if (ev.key === "p") open(g.party.length ? "party" : "starter");
+    if (ev.key === "c" && !g.party.length) open("starter");
+    if (ev.key === "g" && g.gifts.pending.length) open("gift");
     if (ev.key === "s" || ev.key === "ctrl+s") share();
     if (ev.key === "escape" || ev.key === "q" || ev.key === "enter") app.quit();
   }

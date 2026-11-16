@@ -1,19 +1,19 @@
 // The Pokedex daemon: one per machine. It follows every Rex session's program status
-// (OSC 7501), turns terminals that report into agents, awards XP when a turn ends and
-// writes agents.json for the sidebars to draw.
+// (OSC 7501), turns terminals that report into agents, awards XP when a turn ends (and its
+// commit, if it made one) and writes agents.json for the sidebars to draw.
 import fs from "node:fs";
 import path from "node:path";
 import { writeJson, readJson, shared, settings, STATE_DIR } from "./herdr.js";
-import { game, levelOf, nameOf, projectLabel, PARTNERS } from "./game.js";
+import { nameOf, projectLabel, PARTNERS } from "./game.js";
 import { AGENTS_FILE, PID_FILE, daemonPid, partnerOf, showNote } from "./core.js";
 import { connect, sendFrom } from "./client.js";
 import { REX, TERMINAL, rex, api, ensureSidebar, fitSidebar, sidebarPrefs, blockCall, sessions as listSessions, view, windowBlocks, labelOf } from "./rex.js";
 
-const blocks = new Map(); // block id -> { session, records: Map<id, record>, cwd, project, since: {s, at}, subPrev }
+const blocks = new Map(); // block id -> { session, records: Map<id, record>, cwd, project, since: {s, at}, subPrev, turn: {at, head} }
 const sessionLabels = new Map();
 const blockInfo = new Map(); // block id -> { window, label }
 const projects = new Map(); // cwd -> project key
-const seen = new Set(); // blocks whose partner was already caught this start
+const seen = new Set(); // blocks whose project already got its mascot this start
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 
 // A project is the git repo an agent works in, else its folder, else its session.
@@ -30,10 +30,37 @@ function projectFor(cwd, session) {
   return key;
 }
 
+// --- Results: a turn that made a commit reports it. HEAD is read when the turn starts and again
+// once the server took the finished turn, off the event loop with a short timeout; a folder that
+// isn't a git repo, or any git error, reports nothing. (No cheap, reliable signal exists here for
+// "green" or "merged", so those are not reported.)
+export async function headOf(cwd) {
+  if (!cwd) return null;
+  try {
+    const proc = Bun.spawn(["git", "log", "-1", "--format=%H %ct"], { cwd, stdout: "pipe", stderr: "ignore", stdin: "ignore", timeout: 3000 });
+    const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    const [hash, time] = out.trim().split(" ");
+    return code === 0 && hash ? { hash, at: Number(time) * 1000 } : null;
+  } catch {
+    return null;
+  }
+}
+// HEAD moved to a commit made since the turn started (not a checkout of an older one).
+export const committed = (before, after, since) => Boolean(before && after && after.hash !== before.hash && after.at >= since - 1000);
+function reportCommit(session, project, cwd, turn, finished) {
+  Promise.all([turn.head, finished]).then(async ([before]) => {
+    if (!before) return;
+    const after = await headOf(cwd);
+    if (!committed(before, after, turn.at)) return;
+    log(`commit ${after.hash.slice(0, 8)} in ${projectLabel(project)}`);
+    await sendFrom(session, "result", project, "commit");
+  }).catch((error) => log(`commit check failed: ${error}`));
+}
+
 function entry(session, block) {
   let b = blocks.get(block);
   if (!b) {
-    b = { session, records: new Map(), cwd: null, project: null, since: null, subPrev: {} };
+    b = { session, records: new Map(), cwd: null, project: null, since: null, subPrev: {}, turn: null };
     blocks.set(block, b);
   }
   b.session = session;
@@ -68,7 +95,7 @@ function track(block, b) {
   // What happened goes to the Pokedex server, which plays the rules; its news comes back as toasts.
   const send = (action, ...args) => sendFrom(b.session, action, ...args);
   {
-    // An agent's project gets its partner when the agent first shows up (it isn't caught for free).
+    // An agent's project gets its mascot when the agent first shows up (it isn't caught for free).
     if (!seen.has(block)) {
       seen.add(block);
       if (shared(PARTNERS)?.[project] === undefined) send("savePartners", { [project]: partnerOf(project) });
@@ -76,11 +103,15 @@ function track(block, b) {
     const s = norm(agentState(b));
     const prev = b.since;
     if (prev?.s !== s) {
+      // A turn starts with the first working state and lasts through blocked spells until idle.
+      if (s === "working" && !b.turn) b.turn = { at: now, head: headOf(b.cwd) };
       // Done and idle count as one. A working agent going quiet finished a task.
       if (prev?.s === "working" && s === "idle") {
         log(`task finished in ${projectLabel(project)} after ${Math.round((now - prev.at) / 1000)}s (${app ?? "?"})`);
-        send("taskFinished", project, partnerOf(project), now - prev.at, app);
+        const finished = send("taskFinished", project, partnerOf(project), now - prev.at, app);
+        if (b.turn) reportCommit(b.session, project, b.cwd, b.turn, finished);
       }
+      if (s === "idle") b.turn = null;
       if (prev?.s === "blocked") send("unblocked", project, now - prev.at);
       b.since = { s, at: now };
     }
@@ -120,7 +151,7 @@ function publish() {
 }
 // --- Tab names. Rex's own sidebar can't be extended, but it shows each tab's label, so with
 // { "labels": { "enabled": true } } in config.json a tab holding an agent is named after its
-// partner: "Meowth Lv3 · rex". Only tabs still carrying Rex's default name ("Window 1a2b3c4d")
+// mascot: "Meowth · rex". Only tabs still carrying Rex's default name ("Window 1a2b3c4d")
 // or a name we gave are touched; a tab you named yourself is left alone, and a tab whose
 // agents are gone gets its default name back.
 const LABELS_FILE = path.join(STATE_DIR, "labels.json");
@@ -131,14 +162,13 @@ function syncLabels(agents) {
   const enabled = settings().labels?.enabled === true;
   const want = new Map();
   if (enabled) {
-    const g = game();
     const byWindow = new Map();
     for (const a of agents) if (a.window) byWindow.set(a.window, [...(byWindow.get(a.window) ?? []), a]);
     for (const [win, list] of byWindow) {
       // One name per tab: its most urgent agent's project.
       const a = list.sort((x, y) => URGENCY[x.state] - URGENCY[y.state] || y.since - x.since)[0];
       const more = new Set(list.map((x) => x.project)).size - 1;
-      want.set(win, { session: a.session, label: `${nameOf(a.partner)} Lv${levelOf(g.xp[a.project])} · ${projectLabel(a.project)}${more > 0 ? ` +${more}` : ""}`.slice(0, 120) });
+      want.set(win, { session: a.session, label: `${nameOf(a.partner)} · ${projectLabel(a.project)}${more > 0 ? ` +${more}` : ""}`.slice(0, 120) });
     }
   }
   let changed = false;
@@ -306,7 +336,7 @@ function onEvent(ev) {
           delete b.subPrev[id];
         }
         // A record dropped mid-turn (the program exited) ends the turn without an award.
-        if (!b.records.size) b.since = null;
+        if (!b.records.size) b.since = b.turn = null;
         else track(block, b);
         return touch();
       }

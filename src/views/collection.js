@@ -1,7 +1,8 @@
-// KANTO DEX: the searchable collection. With --pick <project> it is the partner picker:
-// only caught Pokemon, Enter makes one the project's partner, and stones can be used.
+// KANTO DEX: the searchable collection. With --pick <project> it is the mascot picker:
+// only caught Pokemon, Enter makes one the project's mascot (drawn on its cards). Stones are
+// used from the party, on the trainer card.
 import { POKEMON } from "../pokemon.js";
-import { game, projectLabel, nameOf, itemsFor, ITEMS, progress } from "../game.js";
+import { game, projectLabel } from "../game.js";
 import { caught, partnerOf, sprite } from "../core.js";
 import { call, shareOnX } from "../client.js";
 import { C, runApp, clip, len } from "../term.js";
@@ -24,7 +25,7 @@ export function runCollection(args) {
     const g = game();
     const items = list();
     s.fill(0, 0, W, H, C.green, C.lcd);
-    let y = plate(s, project ? "CHOOSE PARTNER" : "KANTO DEX", () => app.quit());
+    let y = plate(s, project ? "CHOOSE MASCOT" : "KANTO DEX", () => app.quit());
 
     // Progress, then search and the filter tabs.
     y++;
@@ -66,7 +67,7 @@ export function runCollection(args) {
     scroll = Math.max(0, Math.min(scroll, Math.max(0, Math.ceil(items.length / per) - rowsVisible)));
     render.per = per;
     render.rows = rowsVisible;
-    if (!items.length) s.put(2, top + 1, clip(project && !have.size ? "Nothing caught yet. Pokemon are caught when an agent opens in their project." : "No Pokemon match.", W - 4), { fg: C.soft });
+    if (!items.length) s.put(2, top + 1, clip(project && !have.size ? "Nothing caught yet." : "No Pokemon match.", W - 4), { fg: C.soft });
     const current = project ? partnerOf(project) : null;
     items.slice(scroll * per, (scroll + rowsVisible) * per).forEach((p, i) => {
       const x = left + (i % per) * cw, cy = top + Math.floor(i / per) * ch;
@@ -74,7 +75,7 @@ export function runCollection(args) {
       const bg = got ? (shiny ? C.gold : C.lcd) : C.band;
       s.fill(x, cy, cw - 1, ch - 1, bg, C.ink);
       s.pixel(`no:${p.id}`, x + 1, cy, `#${String(p.id).padStart(3, "0")}`, got ? "band" : "mute");
-      if (p.id === current) s.pixel(`cur:${p.id}`, x + 6, cy, "PARTN", "flame");
+      if (p.id === current) s.pixel(`cur:${p.id}`, x + 6, cy, "MASCOT", "flame");
       else if (got) s.put(x + cw - 3, cy, shiny ? "✦" : "✓", { fg: shiny ? C.flame : C.green, bold: true });
       s.image(`p:${p.id}`, sprite(p.id), x + 3, cy + 1, 6, 3);
       s.fill(x, cy + 4, cw - 1, 1, on ? C.cyan : bg, C.ink);
@@ -93,13 +94,12 @@ export function runCollection(args) {
     const entry = g.dex[sel];
     let foot = "";
     if (message) foot = message;
-    else if (project) {
-      const usable = itemsFor(current, g);
-      foot = `enter choose · ${usable.length ? usable.map((u, i) => `${i + 1} ${ITEMS[u.item].name} ×${u.have} → ${nameOf(u.to)}`).join(" · ") : "no stone fits this partner"}`;
-    } else if (p) {
-      const how = { met: "met in", wild: "caught wild in", evolved: "evolved in" }[entry?.how];
+    else if (project) foot = `enter: ${p?.name ?? "it"} becomes ${projectLabel(project)}'s mascot · stones: trainer card, p`;
+    else if (p) {
+      const where = entry?.project ? ` in ${projectLabel(entry.project)}` : "";
+      const how = { met: `met${where}`, wild: `caught wild${where}`, evolved: `evolved${where}`, starter: "your starter", gift: "a trainer gift", partner: `a project partner${where}` }[entry?.how] ?? `caught${where}`;
       foot = have.has(sel)
-        ? `No. ${String(sel).padStart(3, "0")} ${p.name}${g.shiny.includes(sel) ? " ✦ SHINY" : ""}${entry ? ` · ${how ?? "caught in"} ${entry.project ? projectLabel(entry.project) : "the wild"} · ${new Date(entry.at).toLocaleDateString()}` : ""}`
+        ? `No. ${String(sel).padStart(3, "0")} ${p.name}${g.shiny.includes(sel) ? " ✦ SHINY" : ""}${entry ? ` · ${how} · ${new Date(entry.at).toLocaleDateString()}` : ""}`
         : `No. ${String(sel).padStart(3, "0")} ${p.name} · not caught yet`;
     }
     s.fill(0, H - 1, W, 1, C.red, C.cream);
@@ -109,7 +109,7 @@ export function runCollection(args) {
 
   function choose() {
     if (!project) return;
-    if (!caught().includes(sel)) return void (message = "Only caught Pokemon can be partners.");
+    if (!caught().includes(sel)) return void (message = "Only caught Pokemon can be mascots.");
     call("setPartner", project, sel).then(() => app.quit(), (error) => { message = error.message; });
   }
   function onEvent(ev) {
@@ -138,18 +138,6 @@ export function runCollection(args) {
         );
       case "enter": return choose();
       case "backspace": return void (query = query.slice(0, -1));
-    }
-    if (project && /^[1-3]$/.test(ev.char ?? "") && !query) {
-      const use = itemsFor(partnerOf(project))[Number(ev.char) - 1];
-      if (!use) return;
-      if (!use.have) return void (message = `No ${ITEMS[use.item].name} in the bag.`);
-      call("useItem", project, use.item).then((to) => {
-        if (!to) return;
-        sel = to;
-        const { level } = progress(game().xp[project]);
-        message = `${projectLabel(project)}'s partner evolved into ${nameOf(to)} (Lv ${level})!`;
-      }, (error) => { message = error.message; });
-      return;
     }
     if (ev.char) query += ev.char;
   }

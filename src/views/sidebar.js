@@ -1,12 +1,13 @@
 // The Pokedex sidebar, laid out like pokemon-herdr's: the brand plate with its lens, the
 // PROJECTS / SESSIONS screen (each session a heading band, its tabs under it with their
-// partner), then POKEMON / AGENTS: the KANTO DEX button, a grid of square sprite tiles, a
+// mascot), then POKEMON / AGENTS: the KANTO DEX button, a grid of square sprite tiles, a
 // detail card for the selected agent, and the trainer strip.
 import fs from "node:fs";
 import path from "node:path";
-import { shared, writeJson, ROOT } from "herdr";
+import { shared, writeJson, remoteState, ROOT } from "herdr";
 import { call } from "../client.js";
-import { game, progress, trainerLevel, liveStreak, projectLabel, nameOf, BADGES, WILD_MAX } from "../game.js";
+import { game, partyOf, progress, trainerLevel, liveStreak, projectLabel, nameOf, BADGES, WILD_MAX } from "../game.js";
+import { needsExplainer } from "./party.js";
 import { agentsSnapshot, notes, sprite, badgeArt, caught, ensureDaemon, openDialog, daemonPid, wildNow, NOTE_MS, GOTO_FILE } from "../core.js";
 import { api, rex, view, findWindow, fitColumns } from "../rex.js";
 import { C, runApp, clip, len, ago } from "../term.js";
@@ -19,7 +20,7 @@ const URGENCY = { blocked: 0, done: 1, working: 2, idle: 3 };
 const SPIN = ["◐", "◓", "◑", "◒"];
 const MARK = { blocked: "!", done: "✦", idle: "z", working: "" };
 const SQUARES = ["#5fbfb0", "#e58a4a", "#6f8fe6", "#9a7be6", "#d95f8c", "#5fbf77", "#e8c35a"];
-const AUTO_TAB = /^Window [0-9a-f]{8}$|^.+ Lv\d+ · /; // Rex's default name, or one the daemon gave
+const AUTO_TAB = /^Window [0-9a-f]{8}$|^.+?( Lv\d+)? · /; // Rex's default name, or one the daemon gave
 
 // Static art drawn by tools/make_art.py and shown with kitty graphics: the lens, the lights
 // and the headings in the pixel font. A heading image of n letters covers n cells.
@@ -232,17 +233,15 @@ export function runSidebar() {
     }
     if (vy > room && room > 0) s.put(W - 1, top + Math.round((scroll / Math.max(1, vy - room)) * (room - 1)), "┃", { fg: C.pink });
 
-    // --- The selected agent, spelled out: what a tooltip says in Herdr.
+    // --- The selected agent, spelled out: what a tooltip says in Herdr. Its tile shows the
+    // project's mascot; the strip under it is the party lead, who earns the turn's XP.
     if (selected && detailRows) {
       const dy = bottom + 1;
       const a = selected;
-      const { level, into } = progress(g.xp[a.project]);
       const fainted = !!g.fainted[a.project];
       s.fill(1, dy, W - 2, 4, C.lcd, C.ink);
-      const lv = `Lv${level}`;
       s.fill(1, dy, W - 2, 1, C.green, C.lcd);
-      s.pixel("d:name", 2, dy, clip(projectLabel(a.project), W - 5 - len(lv)), "lcd");
-      s.pixel("d:lv", W - 2 - len(lv), dy, lv, "lcd");
+      s.pixel("d:name", 2, dy, clip(projectLabel(a.project), W - 4), "lcd");
       const word = fainted ? "FAINTED" : a.failed ? "FAILED" : WORDS[a.state];
       const glyph = a.state === "working" ? SPIN[spin % 4] : a.state === "blocked" ? "!" : a.state === "done" ? "●" : "○";
       s.put(2, dy + 1, glyph, { fg: a.state === "blocked" ? C.flame : C.green, bold: true });
@@ -250,21 +249,33 @@ export function runSidebar() {
       const rest = [nameOf(a.partner), a.app, ago(now - a.since)].filter(Boolean).join(" · ");
       if (W - 7 - len(word) > 4) s.put(5 + len(word), dy + 1, clip(rest, W - 7 - len(word)), { fg: C.band });
       const where = a.session !== SESSION ? a.sessionLabel : "";
-      s.put(2, dy + 2, clip(a.msg || a.title || [where, a.subs.length ? `${a.subs.length} sub-agents` : ""].filter(Boolean).join(" · ") || "enter: go to its tab · p: partner", W - 4), { fg: C.band });
-      s.bar(2, dy + 3, W - 4, into, C.green, C.lcdDim);
+      s.put(2, dy + 2, clip(a.msg || a.title || [where, a.subs.length ? `${a.subs.length} sub-agents` : ""].filter(Boolean).join(" · ") || "enter: go to its tab · p: mascot", W - 4), { fg: C.band });
+      const lead = partyOf(g)[0];
+      if (lead) {
+        const label = `★ ${nameOf(lead.id)} Lv${lead.level}`;
+        s.put(2, dy + 3, clip(label, W - 4), { fg: C.band });
+        if (W - 6 - len(label) >= 4) s.bar(3 + len(label), dy + 3, W - 5 - len(label), progress(lead.xp).into, C.green, C.lcdDim);
+      } else s.put(2, dy + 3, clip("No starter yet · t", W - 4), { fg: C.flame });
       s.hit(1, dy, W - 2, 4, () => focusAgent(a));
     }
 
-    // --- News row: a message from an action, the latest note, else the tall grass count. Wild
-    // Pokemon wait there (a day each) until you open it with e or a click; nothing blinks.
+    // --- News row: a message from an action, the latest note, what waits on the trainer card
+    // (the starter choice, the New Pokedex explainer, a gift), else the tall grass count. Wild
+    // Pokemon wait there (a day each) until you open it with e or a click; nothing blinks or
+    // opens by itself.
     const wild = wildNow(g, now);
     const note = notes().filter((n) => now - n.at < NOTE_MS).pop();
     const ny = H - 3;
+    const waiting = !remoteState() ? null : needsExplainer(g) ? "New Pokédex: what changed · t" : !g.party.length ? "Choose your starter · t" : g.gifts.pending.length ? "A gift is waiting · t" : null;
     if (message && now - message.at < 6000) {
       s.put(1, ny, clip(message.text, W - 2), { fg: C.amber });
     } else if (note) {
       s.put(1, ny, clip(`✦ ${note.title}`, W - 2), { fg: C.cream, bold: true });
       if (note.encounter) s.hit(0, ny, W, 1, () => dialog("encounter"));
+    } else if (waiting) {
+      s.fill(0, ny, W, 1, C.amber, C.ink);
+      s.put(1, ny, clip(waiting, W - 2), { fg: C.ink, bold: true });
+      s.hit(0, ny, W, 1, () => dialog("trainer"));
     } else if (wild.length) {
       s.fill(0, ny, W, 1, C.cream, C.ink);
       s.put(1, ny, clip(`Tall grass ${wild.length}/${WILD_MAX} · e`, W - 2), { fg: C.ink, bold: true });
@@ -297,7 +308,7 @@ export function runSidebar() {
     s.hit(W - 7, fy, 6, 1, () => { help = !help; });
 
     if (help) {
-      const text = ["h j k l   move between agents", "enter     go to the agent's tab", "p         choose its partner", "s         priority / by session", "d         Kanto Dex", "t         trainer card", "e         tall grass (wild Pokemon)", "q         close the sidebar"];
+      const text = ["h j k l   move between agents", "enter     go to the agent's tab", "p         choose its mascot", "s         priority / by session", "d         Kanto Dex", "t         trainer card, party", "e         tall grass (wild Pokemon)", "q         close the sidebar"];
       const hy = Math.max(3, H - 3 - text.length);
       s.fill(0, hy, W, text.length, C.ink, C.soft);
       text.forEach((line, i) => s.put(1, hy + i, clip(line, W - 2), { fg: C.soft }));

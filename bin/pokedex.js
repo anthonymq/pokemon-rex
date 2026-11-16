@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { shared, STATE_DIR, readJson } from "../src/herdr.js";
-import { game, levelOf, trainerLevel, liveStreak, nameOf, projectLabel, options, CAUGHT, GAME, PARTNERS, WILD_MAX } from "../src/game.js";
+import { game, partyOf, trainerLevel, liveStreak, nameOf, projectLabel, options, CAUGHT, GAME, GIFTS, PARTNERS, WILD_MAX } from "../src/game.js";
 import { call, connect, loadState, serverDir, shareOnX } from "../src/client.js";
 import { agentsSnapshot, caught, daemonPid, ensureDaemon, openDialog, wildNow, LOG_FILE } from "../src/core.js";
 import { toggleSidebar } from "../src/rex.js";
@@ -87,14 +87,20 @@ switch (cmd) {
     console.log(`daemon    ${pid ? `running (pid ${pid})` : "not running"}`);
     console.log(`state     ${STATE_DIR}`);
     console.log(`server    ${serverDir() ?? "not installed"}`);
-    console.log(`trainer   Lv ${trainerLevel(g)} · caught ${caught().length}/151 · tasks ${g.tasks} + ${g.subtasks} sub · streak ${liveStreak(g)}d (best ${g.streak.best})`);
+    console.log(`trainer   Lv ${trainerLevel(g)} (${g.lifetime} XP) · caught ${caught().length}/151 · tasks ${g.tasks} + ${g.subtasks} sub · streak ${liveStreak(g)}d (best ${g.streak.best})`);
     console.log(`badges    ${g.badges.join(", ") || "none"}`);
     console.log(`options   ${optionsLine()}`);
     const wild = wildNow(g);
     console.log(`wild      tall grass ${wild.length}/${WILD_MAX}${wild.length ? `: ${wild.map((e) => `${nameOf(e.id)} (${e.balls} balls)`).join(", ")}` : ""}`);
-    const partners = shared(PARTNERS) ?? {};
-    for (const [project, xp] of Object.entries(g.xp).sort((a, b) => b[1] - a[1])) {
-      console.log(`partner   ${projectLabel(project).padEnd(24)} ${nameOf(partners[project] ?? 0).padEnd(12)} Lv ${String(levelOf(xp)).padStart(3)}  ${xp} XP`);
+    const party = partyOf(g);
+    if (!party.length) console.log(`party     no starter yet${g.bank ? ` (${g.bank} XP waiting)` : ""}: choose it on the trainer card`);
+    party.forEach((p, i) => {
+      console.log(`party     ${nameOf(p.id).padEnd(12)} Lv ${String(p.level).padStart(3)}  ${p.xp} XP${i === 0 ? "  lead" : "  Day Care"}`);
+    });
+    for (const tr of g.gifts.pending) console.log(`gift      waiting (trainer Lv ${tr}): ${GIFTS.find((x) => x.tr === tr)?.ids.map(nameOf).join(" or ")}, on the trainer card`);
+    const mascots = shared(PARTNERS) ?? {};
+    for (const [project, id] of Object.entries(mascots).sort(([a], [b]) => projectLabel(a).localeCompare(projectLabel(b)))) {
+      console.log(`mascot    ${projectLabel(project).padEnd(24)} ${nameOf(id)}`);
     }
     for (const a of pid ? snap.agents : []) {
       console.log(`agent     ${projectLabel(a.project).padEnd(24)} ${a.state.padEnd(8)} ${(a.app || "?").padEnd(12)} ${nameOf(a.partner)} · ${a.sessionLabel}`);
@@ -160,13 +166,13 @@ switch (cmd) {
     console.log(`pokedex: the Pokedex for Rex
 
   pokedex toggle             open or close the sidebar in this window
-  pokedex open collection    KANTO DEX (add --pick <project> to choose a partner)
-  pokedex open trainer       trainer card
+  pokedex open collection    KANTO DEX (add --pick <project> to choose its mascot)
+  pokedex open trainer       trainer card: party, starter, gifts
   pokedex open encounter     the tall grass: wild Pokemon waiting for you
   pokedex status             daemon, trainer, options and agents, as text
   pokedex set alert off|on|smart   pop a toast for a new wild Pokemon: never, always,
                              or only while no agent is working (smart, the default)
-  pokedex set hard-mode on|off     partners faint when an agent waits on you too long
+  pokedex set hard-mode on|off     an agent left waiting on you too long costs its next task's XP
   pokedex catch <n> | release <n>  debug only: needs a server started with POKEDEX_DEBUG=1
   pokedex share              post progress on X (card image on the clipboard)
   pokedex import-herdr [shared.json] [--force]
