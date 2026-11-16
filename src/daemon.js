@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { writeJson, readJson, shared, settings, STATE_DIR } from "./herdr.js";
 import { game, levelOf, nameOf, projectLabel, PARTNERS } from "./game.js";
-import { AGENTS_FILE, PID_FILE, daemonPid, partnerOf, caught, showNote } from "./core.js";
+import { AGENTS_FILE, PID_FILE, daemonPid, partnerOf, showNote } from "./core.js";
 import { connect, sendFrom } from "./client.js";
 import { REX, TERMINAL, rex, api, ensureSidebar, fitSidebar, sidebarPrefs, blockCall, sessions as listSessions, view, windowBlocks, labelOf } from "./rex.js";
 
@@ -68,12 +68,10 @@ function track(block, b) {
   // What happened goes to the Pokedex server, which plays the rules; its news comes back as toasts.
   const send = (action, ...args) => sendFrom(b.session, action, ...args);
   {
-    // An agent's project gets its partner when the agent first shows up, and catches it.
+    // An agent's project gets its partner when the agent first shows up (it isn't caught for free).
     if (!seen.has(block)) {
       seen.add(block);
-      const id = partnerOf(project);
-      if (shared(PARTNERS)?.[project] === undefined) send("savePartners", { [project]: id });
-      if (!caught().includes(id)) send("met", [id], project);
+      if (shared(PARTNERS)?.[project] === undefined) send("savePartners", { [project]: partnerOf(project) });
     }
     const s = norm(agentState(b));
     const prev = b.since;
@@ -337,7 +335,9 @@ export async function runDaemon() {
     for (const n of state.notes ?? []) {
       if (n.origin !== "rex" || n.at <= shown) continue;
       shown = n.at;
-      try { showNote(n.session, n); } catch (error) { log(`toast failed: ${error}`); }
+      // Agents working right now, live (agents.json lags a moment): the "smart" alert waits on them.
+      const busy = [...blocks.values()].filter((b) => b.records.size && norm(agentState(b)) === "working").length;
+      try { showNote(n.session, n, busy); } catch (error) { log(`toast failed: ${error}`); }
     }
   };
   if (!(await connect({ onState }))) log("Pokedex server not reachable yet; still trying");

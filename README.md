@@ -6,9 +6,7 @@
 
 Claude Code is porting a town map. Codex is fixing a step counter. Beside them, in a red Kanto Pokedex, Pikachu and Eevee bob along while they work.
 
-Then a task finishes. XP lands. Charmander hits Lv 16 and evolves on its own. And sometimes a wild Snorlax drops onto the window, and you have 60 seconds.
-
-You can't grind it. You can only ship.
+Then a task finishes. XP lands. Charmander hits Lv 16 and evolves on its own. And sometimes a wild Snorlax shows up in the tall grass, waiting for you to finish what you're doing.
 
 ---
 
@@ -16,11 +14,11 @@ You can't grind it. You can only ship.
 
 | When | What you see |
 | --- | --- |
-| An agent starts in a project | The project gets a partner Pokemon, and you catch it. |
+| An agent starts in a project | The project gets a partner Pokemon. |
 | An agent is working | Its partner bobs in the sidebar. |
 | An agent finishes a task | **10 XP, +5 per minute it ran, up to 100.** Level-ups, then evolutions at the real Gen 1 levels. |
-| An agent is waiting on you | It jumps to the top under **NEEDS YOU**, in amber, blinking `!`. Leave it 10 minutes and its partner faints. |
-| A task finishes (15% of the time) | A wild Pokemon appears. Three free Poke Balls, 60 seconds. |
+| An agent is waiting on you | It jumps to the top under **NEEDS YOU**, in amber, blinking `!`. Answer within 2 minutes and its partner is happy: +25% XP on the next task. |
+| A task finishes (15% of the time) | A wild Pokemon joins the tall grass. Three free Poke Balls, and it waits a day. |
 | You keep a streak going | Shinies start showing up at 7 days, more at 30. |
 
 Agents are found by [OSC 7501](https://www.superlogical.com/rex/docs/build/program-status), the status protocol Claude Code, Codex and others already speak. Nothing is guessed from screen text.
@@ -48,7 +46,12 @@ Stone and trade evolutions need the item: Fire, Water, Thunder, Leaf and Moon St
 - **3 free Poke Balls.** Great Balls (×1.5) and Ultra Balls (×2) come from your bag.
 - Base odds: **60%** for most, **35%** for final evolutions, **3%** for legendaries.
 - **Keep working and it weakens.** Each task finished while it waits adds 25% to your odds, up to three times.
-- Ignore it for 60 seconds and it flees.
+- **The tall grass** holds up to 5 wild Pokemon. Each waits 24 hours, then leaves. Nothing opens on its own: the sidebar shows `Tall grass 2/5`; open it with `e`, a click or `ctrl+a e` and pick which one to throw at.
+- A toast for a new one depends on `pokedex set alert`: `smart` (the default) only while no agent is working, `on` always, `off` never.
+
+### Hard mode
+
+Off by default. With `pokedex set hard-mode on`, an agent left waiting on you for 10 minutes makes its partner faint, and the next task earns no XP.
 
 ### Kanto Dex
 
@@ -97,7 +100,7 @@ Also playing in [pokemon-herdr](https://github.com/anthonymq/pokemon-herdr)? It 
 | `ctrl+a g` | `pokedex_jump` | Teleport to the agent you picked in the sidebar, else the one that most needs you (blocked, then done, then working). |
 | `ctrl+a d` | `pokedex_collection` | The Kanto Dex. |
 | `ctrl+a t` | `pokedex_trainer` | The trainer card. |
-| `ctrl+a e` | `pokedex_encounter` | The waiting wild Pokemon, focused so you can throw. |
+| `ctrl+a e` | `pokedex_encounter` | The tall grass: the waiting wild Pokemon, focused so you can throw. |
 
 All five are in the command palette under "Pokedex". Change the keys in `pokedex/init.lua` if they clash with yours.
 
@@ -109,10 +112,10 @@ In the sidebar:
 | `enter` or click | go to that agent's tab and focus its pane |
 | `p` or right-click | choose the project's partner from your catches, and use stones |
 | `s` | group agents by priority or by session |
-| `d` `t` `e` | Kanto Dex, trainer card, wild encounter |
+| `d` `t` `e` | Kanto Dex, trainer card, tall grass |
 | `?` `q` | help, close |
 
-On the battle card: `1` Poke Ball, `2` Great Ball, `3` Ultra Ball, `r` run. Or click.
+On the battle card: `←` `→` choose a Pokemon, `1` Poke Ball, `2` Great Ball, `3` Ultra Ball, `r` run, `q` close (they keep waiting). Or click.
 
 ---
 
@@ -126,7 +129,7 @@ On the battle card: `1` Poke Ball, `2` Great Ball, `3` Ultra Ball, `r` run. Or c
 - **The agent card**: project, level, status, partner, program, its task and XP strip.
 - **The trainer strip**: trainer level, streak, badges. Click it for the trainer card.
 
-**News** (level-ups every 5 levels, evolutions, badges, quests, found items) shows as a small floating pane at the top right of the session it happened in, for 7 seconds.
+**News** (evolutions, badges, a "Welcome back!" summary) shows as a small floating pane at the top right of the session it happened in, for 7 seconds, without taking focus. Small news (level-ups, found items, quests) only shows in the sidebar's news row; the server sums it up in the "Welcome back!" note after 2 hours away.
 
 **Tab names.** Rex's own sidebar can't hold custom content, but it shows tab names. With `labels.enabled`, a tab holding an agent is named after its partner, such as `Meowth Lv3 · rex`. Only tabs still carrying Rex's default name are renamed; a tab you named yourself is left alone.
 
@@ -153,6 +156,8 @@ Optional, in `~/.local/state/rex-pokedex/config.json`:
 | `labels.enabled` | Name agent tabs after their partner. |
 | `toasts.enabled` | The floating news pane (on by default). |
 
+Game options are the server's, shared with pokemon-herdr, and shown by `pokedex status` and on the trainer card: `pokedex set alert off|on|smart` and `pokedex set hard-mode on|off`.
+
 The evolution and badge jingles are the server's: turn them off with `"sounds": { "enabled": false }` in `~/.local/state/pokedex-agents-server/config.json`.
 
 Rex only knows a pane's real size while it is on screen, so with `columns` the sidebar measures itself when shown and moves its own border; a sidebar opened in a background tab settles to the exact width when you first look at it.
@@ -166,8 +171,10 @@ pokedex toggle                 # sidebar in this window
 pokedex open collection        # add --pick <project> for the partner picker
 pokedex open trainer
 pokedex open encounter
-pokedex status                 # daemon, trainer and agents as text
-pokedex catch 25               # by hand; release 25 undoes it
+pokedex status                 # daemon, trainer, options and agents as text
+pokedex set alert smart        # off | on | smart: toasts for new wild Pokemon
+pokedex set hard-mode off      # on: partners can faint
+pokedex catch 25               # debug only (server started with POKEDEX_DEBUG=1); release 25 undoes it
 pokedex stop | log             # the daemon
 ```
 

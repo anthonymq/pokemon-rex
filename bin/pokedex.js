@@ -4,9 +4,9 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { shared, STATE_DIR, readJson } from "../src/herdr.js";
-import { game, levelOf, trainerLevel, liveStreak, nameOf, projectLabel, CAUGHT, GAME, PARTNERS } from "../src/game.js";
+import { game, levelOf, trainerLevel, liveStreak, nameOf, projectLabel, options, CAUGHT, GAME, PARTNERS, WILD_MAX } from "../src/game.js";
 import { call, connect, loadState, serverDir, shareOnX } from "../src/client.js";
-import { agentsSnapshot, caught, daemonPid, ensureDaemon, openDialog, LOG_FILE } from "../src/core.js";
+import { agentsSnapshot, caught, daemonPid, ensureDaemon, openDialog, wildNow, LOG_FILE } from "../src/core.js";
 import { toggleSidebar } from "../src/rex.js";
 
 const [cmd = "help", ...args] = process.argv.slice(2);
@@ -33,7 +33,8 @@ const dexId = (text) => {
 
 // The game is the Pokedex server's: views follow it live, one-shot commands read it once.
 const VIEWS = ["sidebar", "collection", "trainer", "encounter", "toast"];
-const READS = ["open", "status", "catch", "release", "import-herdr"];
+const READS = ["open", "status", "catch", "release", "import-herdr", "set"];
+const optionsLine = (o = options()) => `alert ${o.alert} · hard mode ${o.hardMode ? "on" : "off"}`;
 if (VIEWS.includes(cmd)) {
   ensureDaemon();
   await connect();
@@ -70,8 +71,8 @@ switch (cmd) {
     if (!["collection", "trainer", "encounter"].includes(name)) need({ ok: false, error: "open what? collection, trainer or encounter" });
     if (!session()) need({ ok: false, error: "run this inside Rex, or pass --session" });
     ensureDaemon();
-    if (name === "encounter" && !game().encounter) {
-      console.log("No wild Pokemon right now.");
+    if (name === "encounter" && !wildNow(game()).length) {
+      console.log("The tall grass is empty.");
       break;
     }
     const pick = flag("pick");
@@ -88,7 +89,9 @@ switch (cmd) {
     console.log(`server    ${serverDir() ?? "not installed"}`);
     console.log(`trainer   Lv ${trainerLevel(g)} · caught ${caught().length}/151 · tasks ${g.tasks} + ${g.subtasks} sub · streak ${liveStreak(g)}d (best ${g.streak.best})`);
     console.log(`badges    ${g.badges.join(", ") || "none"}`);
-    if (g.encounter) console.log(`wild      ${nameOf(g.encounter.id)} (${g.encounter.balls} balls left)`);
+    console.log(`options   ${optionsLine()}`);
+    const wild = wildNow(g);
+    console.log(`wild      tall grass ${wild.length}/${WILD_MAX}${wild.length ? `: ${wild.map((e) => `${nameOf(e.id)} (${e.balls} balls)`).join(", ")}` : ""}`);
     const partners = shared(PARTNERS) ?? {};
     for (const [project, xp] of Object.entries(g.xp).sort((a, b) => b[1] - a[1])) {
       console.log(`partner   ${projectLabel(project).padEnd(24)} ${nameOf(partners[project] ?? 0).padEnd(12)} Lv ${String(levelOf(xp)).padStart(3)}  ${xp} XP`);
@@ -98,6 +101,7 @@ switch (cmd) {
     }
     break;
   }
+  // Debug only: the server refuses unless it was started with POKEDEX_DEBUG=1, and says so.
   case "catch": {
     const id = dexId(args[0]);
     await ask("catch", id);
@@ -108,6 +112,16 @@ switch (cmd) {
     const id = dexId(args[0]);
     await ask("release", id);
     console.log(`released ${nameOf(id)}: ${JSON.stringify(caught())}`);
+    break;
+  }
+  // Options, kept by the server: when a new wild Pokemon may pop a toast, and hard mode (fainting).
+  case "set": {
+    const [key, value] = args;
+    const onOff = { on: true, off: false };
+    if (key === "alert" && ["off", "on", "smart"].includes(value)) await ask("setOption", "alert", value);
+    else if (key === "hard-mode" && value in onOff) await ask("setOption", "hardMode", onOff[value]);
+    else need({ ok: false, error: "set what? alert off|on|smart, or hard-mode on|off" });
+    console.log(optionsLine());
     break;
   }
   case "stop": {
@@ -148,9 +162,12 @@ switch (cmd) {
   pokedex toggle             open or close the sidebar in this window
   pokedex open collection    KANTO DEX (add --pick <project> to choose a partner)
   pokedex open trainer       trainer card
-  pokedex open encounter     the waiting wild Pokemon
-  pokedex status             daemon, trainer and agents, as text
-  pokedex catch <n> | release <n>
+  pokedex open encounter     the tall grass: wild Pokemon waiting for you
+  pokedex status             daemon, trainer, options and agents, as text
+  pokedex set alert off|on|smart   pop a toast for a new wild Pokemon: never, always,
+                             or only while no agent is working (smart, the default)
+  pokedex set hard-mode on|off     partners faint when an agent waits on you too long
+  pokedex catch <n> | release <n>  debug only: needs a server started with POKEDEX_DEBUG=1
   pokedex share              post progress on X (card image on the clipboard)
   pokedex import-herdr [shared.json] [--force]
   pokedex stop | log         the background daemon

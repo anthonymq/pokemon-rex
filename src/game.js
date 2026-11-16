@@ -3,9 +3,12 @@
 // edit mods/pokedex-agents/game.js and run scripts/sync-game.sh (the repo checks the copies match).
 // State lives in shared("pokedex.game"):
 // { xp: {project: n}, tasks, subtasks, evolutions, streak: {last, days, best}, badges: [ids], shiny: [ids],
-//   encounter: {id, at, balls, weak, project} | null, encounters: {seen, caught, fled}, recent: [{id, at}],
-//   bag: {item: n}, dex: {id: {at, project, how}}, fainted: {project: true}, quests: {day, week, d, w},
-//   version, stats: {days: {day: {turns, ms, seen, caught, fled, quests}}, lengths: [ms]} }
+//   wild: [{id, at, balls, weak, project}] (the tall grass queue, oldest first), encounter: wild[0] | null,
+//   encounters: {seen, caught, fled}, recent: [{id, at}], bag: {item: n}, dex: {id: {at, project, how}},
+//   fainted: {project: true}, happy: {project: true}, quests: {day, week, d, w}, lastTurn,
+//   digest: {levels, items: {item: n}, quests}, version,
+//   stats: {days: {day: {turns, ms, seen, caught, fled, left, quests}}, lengths: [ms]} }
+// Options live in shared("pokedex.options"): {alert: "off" | "on" | "smart", hardMode}.
 // `stats` is private: it stays in the local save and is never shared.
 // A project key is the space's git repo root (machine-qualified for remote spaces), else its name.
 import { shared, setShared, notify, playSound, settings } from "herdr";
@@ -21,9 +24,13 @@ export const PROJECTS = "pokedex.projects"; // space name -> project key, filled
 export const projectKey = (name) => shared(PROJECTS)?.[name] ?? name;
 export const SUBTASK_XP = 10;
 export const ENCOUNTER_CHANCE = 0.15;
-export const ENCOUNTER_MS = 60000;
+export const OPTIONS = "pokedex.options";
+export const ENCOUNTER_MS = 24 * 3600000; // a wild Pokemon waits in the tall grass this long
+export const WILD_MAX = 5; // the tall grass holds this many; no new encounter while it's full
 export const BALLS = 3;
-export const FAINT_MS = 10 * 60000; // an agent left blocked this long makes its partner faint
+export const FAINT_MS = 10 * 60000; // hard mode: an agent left blocked this long makes its partner faint
+export const HAPPY_BONUS = 0.25; // a fast answer: the project's next task earns this much more XP
+const AWAY_MS = 2 * 3600000; // the first turn after this long away brings the "welcome back" summary
 export const FAST_MS = 2 * 60000; // answering a blocked agent this fast counts for the quest
 const STONE_CHANCE = 0.05;
 const RECENT = 10;
@@ -93,9 +100,11 @@ export function game() {
   return {
     xp: g.xp ?? {}, tasks: g.tasks ?? 0, subtasks: g.subtasks ?? 0, evolutions: g.evolutions ?? 0,
     streak: g.streak ?? { last: null, days: 0, best: 0 },
-    badges: g.badges ?? [], shiny: g.shiny ?? [], encounter: g.encounter ?? null,
+    badges: g.badges ?? [], shiny: g.shiny ?? [],
+    wild: g.wild ?? (g.encounter ? [g.encounter] : []), encounter: g.wild?.[0] ?? g.encounter ?? null,
     encounters: g.encounters ?? { seen: 0, caught: 0, fled: 0 }, recent: g.recent ?? [],
-    bag: g.bag ?? {}, dex: g.dex ?? {}, fainted: g.fainted ?? {}, quests: g.quests ?? null,
+    bag: g.bag ?? {}, dex: g.dex ?? {}, fainted: g.fainted ?? {}, happy: g.happy ?? {}, quests: g.quests ?? null,
+    lastTurn: g.lastTurn ?? null, digest: g.digest ?? blankDigest(),
     // A save written before versioning is version 1; a brand-new one starts at the current version.
     version: g.version ?? (Object.keys(g).length ? 1 : SAVE_VERSION), stats: g.stats ?? blankStats(),
   };
@@ -104,10 +113,54 @@ export function game() {
 // --- Save versions. Each step upgrades a save from version n to n + 1; the server runs them at start
 // and after an import or a merge. A save newer than these rules is left alone.
 //   1 -> 2: local stats.
-export const SAVE_VERSION = 2;
+//   2 -> 3: the tall grass queue (the waiting encounter joins it); fainting became hard mode only.
+export const SAVE_VERSION = 3;
 const MIGRATIONS = {
   1: (g) => ({ ...g, stats: g.stats ?? blankStats() }),
+  2: (g) => ({ ...g, wild: g.wild ?? (g.encounter ? [g.encounter] : []), fainted: {}, happy: g.happy ?? {} }),
 };
+// Writes the game; `encounter` mirrors the head of the queue for views that show one Pokemon.
+function put(g) {
+  setShared(GAME, { ...g, encounter: g.wild?.[0] ?? null });
+}
+
+// --- Options: when a new wild Pokemon may grab attention, and hard mode (fainting).
+//   alert "off": never; "on": always; "smart" (default): only while no agent is busy.
+export const ALERTS = ["off", "on", "smart"];
+export const options = () => ({ alert: "smart", hardMode: false, ...(shared(OPTIONS) ?? {}) });
+export const shouldAlert = (busyAgents, o = options()) => o.alert === "on" || (o.alert === "smart" && busyAgents === 0);
+export function setOption(key, value) {
+  if (key === "alert" && !ALERTS.includes(value)) throw new Error(`alert is one of ${ALERTS.join(", ")}`);
+  if (key === "hardMode" && typeof value !== "boolean") throw new Error("hardMode is true or false");
+  if (!["alert", "hardMode"].includes(key)) throw new Error(`unknown option ${key}`);
+  setShared(OPTIONS, { ...(shared(OPTIONS) ?? {}), [key]: value });
+  if (key === "hardMode" && !value) put({ ...game(), fainted: {} });
+}
+
+// --- The "welcome back" summary: small news (level-ups, items, quests) is kept quiet and counted here,
+// then told once when the person comes back.
+const blankDigest = () => ({ levels: 0, items: {}, quests: 0 });
+function remember(g, key, item) {
+  const d = { ...blankDigest(), ...g.digest };
+  g.digest = key === "items" ? { ...d, items: { ...d.items, [item]: (d.items[item] ?? 0) + 1 } } : { ...d, [key]: d[key] + 1 };
+}
+// One "welcome back" note with what waits and what happened since the last one; null when nothing did.
+// The server sends it at the first turn after AWAY_MS; a client may call it when the person returns.
+export function digest(g0 = null) {
+  const g = g0 ?? game();
+  const d = { ...blankDigest(), ...g.digest };
+  const wild = g.wild.filter((e) => !expired(e)).length;
+  const items = Object.entries(d.items).map(([k, n]) => `${n} ${ITEMS[k]?.name ?? k}${n > 1 ? "s" : ""}`);
+  const parts = [
+    wild && `${wild} wild Pokemon waiting`, d.levels && `${d.levels} level-up${d.levels > 1 ? "s" : ""}`,
+    items.length && `found ${items.join(", ")}`, d.quests && `${d.quests} quest${d.quests > 1 ? "s" : ""} done`,
+  ].filter(Boolean);
+  g.digest = blankDigest();
+  if (!g0) put(g);
+  if (!parts.length) return null;
+  notify({ title: "Welcome back!", body: `${parts.join(" | ")}.`, level: "info" });
+  return parts;
+}
 // Upgrades the save to SAVE_VERSION. Returns the version it now has.
 export function migrateSave() {
   const raw = shared(GAME);
@@ -123,7 +176,7 @@ export function migrateSave() {
 const STATS_DAYS = 90; // days kept
 const STATS_LENGTHS = 200; // recent turn lengths kept for the median
 const blankStats = () => ({ days: {}, lengths: [] });
-const blankDay = () => ({ turns: 0, ms: 0, seen: 0, caught: 0, fled: 0, quests: 0 });
+const blankDay = () => ({ turns: 0, ms: 0, seen: 0, caught: 0, fled: 0, left: 0, quests: 0 });
 // Adds n to today's `key`. Mutates g.
 function tally(g, key, n = 1) {
   const s = g.stats ?? blankStats(), k = day(new Date());
@@ -144,7 +197,7 @@ export function localStats(g = game(), now = new Date(), span = 14) {
   const sum = (key) => days.reduce((n, d) => n + d[key], 0);
   return {
     span, activeDays: days.length, turnsPerDay: median(days.map((d) => d.turns)), medianTurnMs: median(g.stats.lengths),
-    turns: sum("turns"), seen: sum("seen"), caught: sum("caught"), fled: sum("fled"), quests: sum("quests"),
+    turns: sum("turns"), seen: sum("seen"), caught: sum("caught"), fled: sum("fled"), left: sum("left") || 0, quests: sum("quests"),
   };
 }
 
@@ -157,10 +210,21 @@ export function progress(xp) {
   return { level, into: Math.min(1, Math.max(0, ((xp ?? 0) - lo) / (hi - lo))) };
 }
 export const trainerLevel = (g) => Object.values(g.xp).reduce((sum, xp) => sum + levelOf(xp), 0);
-// Today's streak, which lapses when yesterday had no finished task.
+// True when the streak's last day is yesterday, or only a weekend lies between it and today:
+// weekends never break a streak.
+function streakAlive(last, now = new Date()) {
+  if (!last) return false;
+  for (let i = 1; i <= 3; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+    if (day(d) === last) return true;
+    if (d.getDay() !== 0 && d.getDay() !== 6) return false;
+  }
+  return false;
+}
+// Today's streak, which lapses when a weekday passed with no finished task.
 export function liveStreak(g, now = new Date()) {
   const s = g.streak;
-  return s.last === day(now) || s.last === day(new Date(now - 86400000)) ? s.days : 0;
+  return s.last === day(now) || streakAlive(s.last, now) ? s.days : 0;
 }
 
 const day = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -205,7 +269,7 @@ function save(g, jingled = false) {
     if (!jingled) jingle("badge");
     for (const b of earned) notify({ title: `${b.name} ${b.rank ? "rank reached" : "Badge earned"}!`, body: b.goal, level: "success" });
   }
-  setShared(GAME, g);
+  put(g);
 }
 
 // Awards every badge the save already qualifies for, after progress came in from outside the rules
@@ -260,6 +324,7 @@ function bump(g, fn) {
     if (c.done.includes(x.id) || x.n(c) < x.need) continue;
     c.done = [...c.done, x.id];
     tally(g, "quests");
+    remember(g, "quests");
     let reward = "2 Great Balls";
     if (weekly) {
       const stone = STONES[hash(q.week) % STONES.length];
@@ -267,12 +332,12 @@ function bump(g, fn) {
       gain(g, stone);
       reward = `2 Ultra Balls and a ${ITEMS[stone].name}`;
     } else gain(g, "great", 2);
-    notify({ title: `${weekly ? "Weekly" : "Daily"} quest complete!`, body: `${x.goal}: ${reward}.`, level: "success" });
+    notify({ title: `${weekly ? "Weekly" : "Daily"} quest complete!`, body: `${x.goal}: ${reward}.`, level: "success", quiet: true });
   }
 }
 const addOnce = (list, v) => (v && !list.includes(v) ? [...list, v] : list);
 
-// Catches from outside the rules (an agent opening in its project) go through here, for shinies and badges.
+// Catches from outside the rules (the debug catch action) go through here, for shinies and badges.
 export function recordCatches(ids, project = null) {
   const g = game();
   const fresh = addCaught(g, ids, "met", project);
@@ -287,7 +352,7 @@ export function migrateProject(from, to) {
   if (g.xp[from] !== undefined) {
     const { [from]: moved, ...rest } = g.xp;
     g.xp = { ...rest, [to]: (rest[to] ?? 0) + moved };
-    setShared(GAME, g);
+    put(g);
   }
   if (partners[from] !== undefined) {
     const { [from]: partner, ...rest } = partners;
@@ -319,8 +384,9 @@ function award(g, project, partnerId, amount) {
     evolve(g, project, partnerId, id, ` (Lv ${after})`);
     return true;
   }
+  if (after > before) remember(g, "levels");
   if (Math.floor(after / LEVEL_NEWS_EVERY) > Math.floor(before / LEVEL_NEWS_EVERY)) {
-    notify({ title: `${nameOf(partnerId)} reached Lv ${after}!`, body: projectLabel(project), level: "info", icon: `mods/pokedex-agents/pokemon/${partnerId}.png` });
+    notify({ title: `${nameOf(partnerId)} reached Lv ${after}!`, body: projectLabel(project), level: "info", icon: `mods/pokedex-agents/pokemon/${partnerId}.png`, quiet: true });
   }
   return false;
 }
@@ -342,22 +408,51 @@ export function useItem(project, item) {
   return to;
 }
 
-// An agent stopped needing the person after `ms`: quick answers count for a quest; one left
-// waiting FAINT_MS or more makes the project's partner faint until its next task.
+// The base form of a Pokemon's evolution line (Charizard -> Charmander).
+const PREV = Object.fromEntries([...Object.entries(EVOLVE).map(([from, [to]]) => [to, +from]), ...Object.entries(ITEM_EVOLVE).flatMap(([from, m]) => Object.values(m).map((to) => [to, +from]))]);
+export function baseOf(id) {
+  while (PREV[id]) id = PREV[id];
+  return id;
+}
+// A default partner, from whatever a client hashed: always a base form, never a legendary.
+const STARTERS = [1, 4, 7];
+export const defaultPartner = (id) => (LEGENDARY.includes(id) ? STARTERS[id % 3] : baseOf(id));
+
+// An agent stopped needing the person after `ms`. A quick answer counts for a quest and makes the
+// project's partner happy (+25% XP on its next task). In hard mode, one left waiting FAINT_MS or more
+// makes the partner faint until its next task.
 export function unblocked(project, ms) {
   const g = game();
-  if (ms <= FAST_MS) bump(g, (c) => { c.fast += 1; });
-  else if (ms >= FAINT_MS && !g.fainted[project]) {
+  if (ms <= FAST_MS) {
+    bump(g, (c) => { c.fast += 1; });
+    g.happy = { ...g.happy, [project]: true };
+  } else if (options().hardMode && ms >= FAINT_MS && !g.fainted[project]) {
     g.fainted = { ...g.fainted, [project]: true };
     const id = (shared(PARTNERS) ?? {})[project];
     notify({ title: `${id ? nameOf(id) : "Your partner"} fainted!`, body: `${projectLabel(project)}'s agent waited ${Math.round(ms / 60000)} min. Its next task earns no XP.`, level: "warning", icon: id ? `mods/pokedex-agents/pokemon/${id}.png` : undefined });
   }
-  setShared(GAME, g);
+  put(g);
+}
+
+// A wild Pokemon leaves the queue: "caught", "fled" (it got away or waited too long) or "left"
+// (the person ran). Mutates g.
+function leave(g, index, how) {
+  g.wild = g.wild.filter((_, i) => i !== index);
+  const key = how === "left" ? "fled" : how;
+  g.encounters = { ...g.encounters, [key]: g.encounters[key] + 1 };
+  tally(g, how);
+}
+// Pokemon that waited longer than ENCOUNTER_MS flee. Mutates g.
+function expire(g, now = Date.now()) {
+  for (let i = g.wild.length - 1; i >= 0; i--) if (expired(g.wild[i], now)) leave(g, i, "fled");
 }
 
 // A finished agent turn: XP by its length, the streak, items, quests, maybe a wild Pokemon.
 export function finishTask(project, partnerId, ms, app = null) {
   const g = game();
+  // Back after a while: one summary of what waits and what happened, before this turn's news.
+  if (g.lastTurn && Date.now() - g.lastTurn >= AWAY_MS) digest(g);
+  g.lastTurn = Date.now();
   g.tasks += 1;
   tally(g, "turns");
   tally(g, "ms", Math.max(0, ms));
@@ -370,24 +465,31 @@ export function finishTask(project, partnerId, ms, app = null) {
     // A fainted partner spends this task recovering.
     const { [project]: _, ...rest } = g.fainted;
     g.fainted = rest;
-    notify({ title: `${nameOf(partnerId)} recovered`, body: `${projectLabel(project)}'s partner is back; this task earned no XP.`, level: "info", icon: `mods/pokedex-agents/pokemon/${partnerId}.png` });
-  } else evolved = award(g, project, partnerId, taskXp(ms));
+    notify({ title: `${nameOf(partnerId)} recovered`, body: `${projectLabel(project)}'s partner is back; this task earned no XP.`, level: "info", icon: `mods/pokedex-agents/pokemon/${partnerId}.png`, quiet: true });
+  } else {
+    const happy = !!g.happy[project];
+    const { [project]: _, ...rest } = g.happy;
+    g.happy = rest;
+    evolved = award(g, project, partnerId, Math.round(taskXp(ms) * (happy ? 1 + HAPPY_BONUS : 1)));
+  }
 
   // Long turns pay out in items.
   if (ms >= 10 * 60000) gain(g, "great");
   if (ms >= 60 * 60000) {
     gain(g, "link");
-    notify({ title: "Found a Link Cable!", body: "An hour-long task. Trade evolutions need one.", level: "success" });
+    remember(g, "items", "link");
+    notify({ title: "Found a Link Cable!", body: "An hour-long task. Trade evolutions need one.", level: "success", quiet: true });
   }
   if (Math.random() < STONE_CHANCE) {
     const stone = STONES[Math.floor(Math.random() * STONES.length)];
     gain(g, stone);
-    notify({ title: `Found a ${ITEMS[stone].name}!`, body: "Use it from a partner's picker.", level: "success" });
+    remember(g, "items", stone);
+    notify({ title: `Found a ${ITEMS[stone].name}!`, body: "Use it from a partner's picker.", level: "success", quiet: true });
   }
 
   const today = day(new Date());
   if (g.streak.last !== today) {
-    const days = g.streak.last === day(new Date(Date.now() - 86400000)) ? g.streak.days + 1 : 1;
+    const days = streakAlive(g.streak.last) ? g.streak.days + 1 : 1;
     g.streak = { last: today, days, best: Math.max(g.streak.best, days) };
     gain(g, "great");
     if (days % 7 === 0) gain(g, "ultra");
@@ -400,21 +502,18 @@ export function finishTask(project, partnerId, ms, app = null) {
     if (ms >= 10 * 60000) c.long += 1;
   });
 
-  // An encounter nobody answered fled; without this it would block every later one.
-  if (g.encounter && expired(g.encounter)) {
-    g.encounters = { ...g.encounters, fled: g.encounters.fled + 1 };
-    tally(g, "fled");
-    g.encounter = null;
-  }
-  // Work done while a Pokemon waits wears it down.
-  if (g.encounter) g.encounter = { ...g.encounter, weak: Math.min(3, (g.encounter.weak ?? 0) + 1) };
-  else if (Math.random() < ENCOUNTER_CHANCE) {
+  // The tall grass: old Pokemon flee, the rest wear down with the work done while they wait, and a
+  // new one may join while there's room. A new one is news, but never opens anything by itself:
+  // clients alert only when shouldAlert() says so.
+  expire(g);
+  g.wild = g.wild.map((e) => ({ ...e, weak: Math.min(3, (e.weak ?? 0) + 1) }));
+  if (g.wild.length < WILD_MAX && Math.random() < ENCOUNTER_CHANCE) {
     let wild = 1 + Math.floor(Math.random() * 151);
     if (LEGENDARY.includes(wild)) wild = 1 + Math.floor(Math.random() * 151); // legendaries need a second roll
-    g.encounter = { id: wild, at: Date.now(), balls: BALLS, weak: 0, project };
+    g.wild = [...g.wild, { id: wild, at: Date.now(), balls: BALLS, weak: 0, project }];
     g.encounters = { ...g.encounters, seen: g.encounters.seen + 1 };
     tally(g, "seen");
-    notify({ title: `A wild ${nameOf(wild)} appeared!`, body: "Click to throw a Poke Ball.", level: "info", timeout: ENCOUNTER_MS, icon: `mods/pokedex-agents/pokemon/${wild}.png`, action: { name: "mod.open", args: { name: "pokedex-encounter" } } });
+    notify({ title: `A wild ${nameOf(wild)} appeared!`, body: `It's waiting in the tall grass (${g.wild.length}/${WILD_MAX}).`, level: "info", icon: `mods/pokedex-agents/pokemon/${wild}.png`, action: { name: "mod.open", args: { name: "pokedex-encounter" } } });
   }
   save(g, evolved);
 }
@@ -426,50 +525,42 @@ export function finishSubTask(project, partnerId) {
   save(g, g.fainted[project] ? false : award(g, project, partnerId, SUBTASK_XP));
 }
 
-// One ball at the waiting encounter: "caught", "missed", "fled", "gone" or "empty" (none of that ball).
-// Poke Balls are the encounter's free three; Great and Ultra Balls come from the bag.
-export function throwBall(ball = "poke") {
+// One ball at a waiting Pokemon (`index` in the queue, the oldest by default): "caught", "missed",
+// "fled", "gone" (none there) or "empty" (none of that ball). Poke Balls are the encounter's free
+// three; Great and Ultra Balls come from the bag.
+export function throwBall(ball = "poke", index = 0) {
   const g = game();
-  const e = g.encounter;
-  if (!e || expired(e)) {
-    if (e) {
-      g.encounters = { ...g.encounters, fled: g.encounters.fled + 1 };
-      tally(g, "fled");
-    }
-    g.encounter = null;
-    setShared(GAME, g);
+  expire(g);
+  const e = g.wild[index];
+  if (!e) {
+    put(g);
     return "gone";
   }
   if (ball === "poke" ? e.balls < 1 : !(g.bag[ball] > 0)) return "empty";
-  const left = ball === "poke" ? { ...e, balls: e.balls - 1 } : e;
+  const after = ball === "poke" ? { ...e, balls: e.balls - 1 } : e;
   if (ball !== "poke") g.bag = { ...g.bag, [ball]: g.bag[ball] - 1 };
   if (Math.random() < throwRate(e, ball)) {
     addCaught(g, [e.id], "wild", e.project ?? null);
-    g.encounter = null;
-    g.encounters = { ...g.encounters, caught: g.encounters.caught + 1 };
-    tally(g, "caught");
+    leave(g, index, "caught");
     bump(g, (c) => { c.catches += 1; });
     save(g);
     return "caught";
   }
   // It stays while any ball is left to throw.
-  if (left.balls > 0 || (g.bag.great ?? 0) > 0 || (g.bag.ultra ?? 0) > 0) {
-    g.encounter = left;
-    setShared(GAME, g);
+  if (after.balls > 0 || (g.bag.great ?? 0) > 0 || (g.bag.ultra ?? 0) > 0) {
+    g.wild = g.wild.map((w, i) => (i === index ? after : w));
+    put(g);
     return "missed";
   }
-  g.encounter = null;
-  g.encounters = { ...g.encounters, fled: g.encounters.fled + 1 };
-  tally(g, "fled");
-  setShared(GAME, g);
+  leave(g, index, "fled");
+  put(g);
   return "fled";
 }
 
-export function runAway() {
+// Leaves a waiting Pokemon (the oldest by default) in the grass for good.
+export function runAway(index = 0) {
   const g = game();
-  if (g.encounter) {
-    g.encounters = { ...g.encounters, fled: g.encounters.fled + 1 };
-    tally(g, "fled");
-  }
-  setShared(GAME, { ...g, encounter: null });
+  expire(g);
+  if (g.wild[index]) leave(g, index, "left");
+  put(g);
 }

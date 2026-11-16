@@ -77,7 +77,7 @@ const command = (view, args = []) => ({
   options: { command: [BUN, CLI, view, ...args], shell: "none", cwd: ROOT },
 });
 export const LABELS = { sidebar: "Pokedex", collection: "Kanto Dex", trainer: "Trainer Card", encounter: "Wild Pokemon", toast: "Pokedex News" };
-const SIZES = { collection: [100, 34], trainer: [96, 36], encounter: [52, 15], toast: [48, 7] };
+const SIZES = { collection: [100, 34], trainer: [96, 36], encounter: [52, 18], toast: [48, 7] };
 
 // Opens a view as a floating pane over a window, sized in cells and placed like a dialog
 // (centered), a banner (top center) or a toast (top right).

@@ -6,8 +6,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { shared, writeJson, ROOT } from "herdr";
 import { call } from "../client.js";
-import { game, progress, trainerLevel, liveStreak, projectLabel, nameOf, BADGES, ENCOUNTER_MS } from "../game.js";
-import { agentsSnapshot, notes, sprite, badgeArt, caught, ensureDaemon, openDialog, daemonPid, NOTE_MS, GOTO_FILE } from "../core.js";
+import { game, progress, trainerLevel, liveStreak, projectLabel, nameOf, BADGES, WILD_MAX } from "../game.js";
+import { agentsSnapshot, notes, sprite, badgeArt, caught, ensureDaemon, openDialog, daemonPid, wildNow, NOTE_MS, GOTO_FILE } from "../core.js";
 import { api, rex, view, findWindow, fitColumns } from "../rex.js";
 import { C, runApp, clip, len, ago } from "../term.js";
 
@@ -255,19 +255,20 @@ export function runSidebar() {
       s.hit(1, dy, W - 2, 4, () => focusAgent(a));
     }
 
-    // --- News row: a waiting wild Pokemon, a message from an action, or the latest note.
-    const e = g.encounter && now - g.encounter.at <= ENCOUNTER_MS ? g.encounter : null;
+    // --- News row: a message from an action, the latest note, else the tall grass count. Wild
+    // Pokemon wait there (a day each) until you open it with e or a click; nothing blinks.
+    const wild = wildNow(g, now);
     const note = notes().filter((n) => now - n.at < NOTE_MS).pop();
     const ny = H - 3;
-    if (e) {
-      const left = Math.max(0, Math.ceil((ENCOUNTER_MS - (now - e.at)) / 1000));
-      s.fill(0, ny, W, 1, s.phase ? C.gold : C.cream, C.ink);
-      s.put(1, ny, clip(`! WILD ${nameOf(e.id).toUpperCase()} · e · ${left}s`, W - 2), { fg: C.ink, bold: true });
-      s.hit(0, ny, W, 1, () => dialog("encounter"));
-    } else if (message && now - message.at < 6000) {
+    if (message && now - message.at < 6000) {
       s.put(1, ny, clip(message.text, W - 2), { fg: C.amber });
     } else if (note) {
       s.put(1, ny, clip(`✦ ${note.title}`, W - 2), { fg: C.cream, bold: true });
+      if (note.encounter) s.hit(0, ny, W, 1, () => dialog("encounter"));
+    } else if (wild.length) {
+      s.fill(0, ny, W, 1, C.cream, C.ink);
+      s.put(1, ny, clip(`Tall grass ${wild.length}/${WILD_MAX} · e`, W - 2), { fg: C.ink, bold: true });
+      s.hit(0, ny, W, 1, () => dialog("encounter"));
     }
 
     // --- Footer: the trainer strip on an LCD chip, and a help button.
@@ -296,7 +297,7 @@ export function runSidebar() {
     s.hit(W - 7, fy, 6, 1, () => { help = !help; });
 
     if (help) {
-      const text = ["h j k l   move between agents", "enter     go to the agent's tab", "p         choose its partner", "s         priority / by session", "d         Kanto Dex", "t         trainer card", "e         wild encounter", "q         close the sidebar"];
+      const text = ["h j k l   move between agents", "enter     go to the agent's tab", "p         choose its partner", "s         priority / by session", "d         Kanto Dex", "t         trainer card", "e         tall grass (wild Pokemon)", "q         close the sidebar"];
       const hy = Math.max(3, H - 3 - text.length);
       s.fill(0, hy, W, text.length, C.ink, C.soft);
       text.forEach((line, i) => s.put(1, hy + i, clip(line, W - 2), { fg: C.soft }));
@@ -319,7 +320,7 @@ export function runSidebar() {
       case "p": order[sel] ? dialog("collection", ["--pick", order[sel].project]) : say("No agent selected"); break;
       case "d": dialog("collection"); break;
       case "t": dialog("trainer"); break;
-      case "e": game().encounter ? dialog("encounter") : say("No wild Pokemon right now"); break;
+      case "e": wildNow(game()).length ? dialog("encounter") : say("The tall grass is empty"); break;
       case "s": toggleSort(); break;
       case "?": help = !help; break;
       case "q": app.quit(); break;

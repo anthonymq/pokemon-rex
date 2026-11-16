@@ -1,6 +1,6 @@
 // The trainer card: stats, recent catches, badges, quests, the bag and every partner by XP.
 import { shared } from "herdr";
-import { game, progress, trainerLevel, liveStreak, projectLabel, nameOf, quests, BADGES, ITEMS, PARTNERS } from "../game.js";
+import { game, progress, trainerLevel, liveStreak, projectLabel, nameOf, quests, options, BADGES, ITEMS, PARTNERS } from "../game.js";
 import { caught, sprite, badgeArt } from "../core.js";
 import { shareOnX } from "../client.js";
 import { C, runApp, clip, len } from "../term.js";
@@ -32,7 +32,7 @@ export function runTrainer() {
 
     // Recent catches.
     section(s, "h:recent", 2, y, "RECENT CATCHES", W - 4);
-    if (!g.recent.length) s.put(2, y + 2, "None yet. Pokemon are caught when an agent opens in their project.".slice(0, W - 4), { fg: C.soft });
+    if (!g.recent.length) s.put(2, y + 2, "None yet. Wild Pokemon wait in the tall grass after finished tasks.".slice(0, W - 4), { fg: C.soft });
     g.recent.slice(0, Math.floor((W - 4) / 7)).forEach((r, i) => {
       const x = 2 + i * 7, shiny = g.shiny.includes(r.id);
       s.fill(x, y + 1, 6, 3, shiny ? C.gold : C.lcd, C.ink);
@@ -95,7 +95,8 @@ export function runTrainer() {
       s.put(31, ry + 1, `${xp} XP${g.fainted[project] ? " · fainted" : ""}`, { fg: C.soft });
     });
     s.fill(0, H - 1, W, 1, C.red, C.cream);
-    s.put(2, H - 1, clip(message || "s share on X · j/k scroll · q close", W - 4), { fg: C.cream });
+    const o = options();
+    s.put(2, H - 1, clip(message || `s share on X · j/k scroll · q close · alert ${o.alert} · hard mode ${o.hardMode ? "on" : "off"} (pokedex set)`, W - 4), { fg: C.cream });
   }
   function share() {
     message = "Opening X...";

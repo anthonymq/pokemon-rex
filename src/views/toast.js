@@ -1,6 +1,7 @@
 // Pokedex news as a small floating pane: level-ups, evolutions, badges, quests, items.
-// It shows every fresh note and closes itself when the last one is old.
-import { notes, sprite, NOTE_MS } from "../core.js";
+// It shows every fresh note that may pop up (not small news; a wild Pokemon only when the alert
+// setting allows) and closes itself when the last one is old.
+import { notes, sprite, toastable, NOTE_MS } from "../core.js";
 import { C, runApp, clip, wrap } from "../term.js";
 
 const TINT = { success: C.done, warning: C.amber, info: C.cyan };
@@ -10,7 +11,7 @@ export function runToast() {
   function render(s) {
     const W = s.cols, H = s.rows;
     const now = Date.now();
-    const fresh = notes().filter((n) => !n.encounter && now - n.at < NOTE_MS).slice(-Math.max(1, Math.floor(H / 3)));
+    const fresh = notes().filter((n) => now - n.at < NOTE_MS && toastable(n)).slice(-Math.max(1, Math.floor(H / 3)));
     if (!fresh.length) {
       if (now - started > 1500) app.quit();
       return;

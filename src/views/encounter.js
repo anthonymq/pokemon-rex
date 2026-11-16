@@ -1,32 +1,50 @@
-// A wild Pokemon: the battle card that floats over the window. Throw a ball or run;
-// after 60 s it flees on its own.
-import { game, nameOf, throwRate, ITEMS, ENCOUNTER_MS } from "../game.js";
+// The tall grass: the wild Pokemon waiting for you (up to five, a day each), as a battle card
+// that floats over the window. Pick one, throw a ball or run; closing leaves them waiting.
+import { game, nameOf, throwRate, ITEMS, ENCOUNTER_MS, WILD_MAX } from "../game.js";
 import { call } from "../client.js";
-import { sprite } from "../core.js";
+import { sprite, wildNow } from "../core.js";
 import { C, runApp, clip, len } from "../term.js";
 
 const BALLS = [["poke", "Poke Ball"], ["great", "Great Ball"], ["ultra", "Ultra Ball"]];
+const same = (a, b) => a && b && a.id === b.id && a.at === b.at;
+const until = (ms) => (ms >= 3600000 ? `${Math.floor(ms / 3600000)} H ${Math.floor((ms % 3600000) / 60000)} M` : `${Math.max(1, Math.ceil(ms / 60000))} M`);
 
 export function runEncounter() {
-  let result = null; // { text, at, id }
-  const first = game().encounter;
-  if (!first || Date.now() - first.at > ENCOUNTER_MS) {
-    console.log("No wild Pokemon right now.");
+  if (!wildNow(game()).length) {
+    console.log("The tall grass is empty.");
     setTimeout(() => process.exit(0), 1200);
     return;
   }
+  let pick = wildNow(game())[0]; // the chosen Pokemon, followed by identity: the queue moves under it
+  let result = null; // { text, id }
+  let note = "";
+  let busy = false; // one ball in the air at a time
+
+  // The chosen one's place in the queue now (what throwBall and runAway take), or -1 once it's gone.
+  const indexOf = () => wildNow(game()).findIndex((e) => same(e, pick));
+  const select = (i) => {
+    const wild = wildNow(game());
+    if (!wild.length) return;
+    pick = wild[(i + wild.length) % wild.length];
+    note = "";
+  };
+  // A result stays on the card a moment, then the next waiting Pokemon is up, or the card closes.
   const finish = (text, id) => {
-    result = { text, at: Date.now(), id };
-    setTimeout(() => app.quit(), 2200);
+    result = { text, id };
+    setTimeout(() => {
+      result = null;
+      if (wildNow(game()).length) select(0);
+      else app.quit();
+    }, 2200);
   };
 
-  let busy = false; // one ball in the air at a time
   function toss(ball) {
     if (result || busy) return;
-    const e = game().encounter;
-    const id = e?.id ?? first.id;
+    const index = indexOf();
+    if (index < 0) return select(0);
+    const id = pick.id;
     busy = true;
-    call("throwBall", ball).then((outcome) => {
+    call("throwBall", ball, index).then((outcome) => {
       if (outcome === "caught") finish(`Gotcha! ${nameOf(id)} was caught!`, id);
       else if (outcome === "fled") finish(`${nameOf(id)} fled!`, id);
       else if (outcome === "gone") finish(`${nameOf(id)} is gone.`, id);
@@ -34,34 +52,56 @@ export function runEncounter() {
       else note = `${nameOf(id)} broke free!`;
     }, (error) => { note = error.message; }).finally(() => { busy = false; });
   }
-  let note = "";
+  function run() {
+    if (result || busy) return;
+    const index = indexOf();
+    if (index < 0) return select(0);
+    const id = pick.id;
+    busy = true;
+    call("runAway", index).then(() => finish(`Got away from ${nameOf(id)}.`, id), (error) => { note = error.message; }).finally(() => { busy = false; });
+  }
 
   function render(s) {
     const W = s.cols, H = s.rows;
     const g = game();
-    const e = g.encounter;
     const now = Date.now();
-    const id = result?.id ?? e?.id ?? first.id;
-    // Someone else answered it (another window's card), or time ran out.
-    if (!result && !busy && (!e || now - e.at > ENCOUNTER_MS)) {
-      if (e) call("throwBall", "poke").catch(() => {}); // counts it as fled
-      finish(`${nameOf(id)} fled!`, id);
+    const wild = wildNow(g, now);
+    // Caught from another window, or it waited too long: the next one is up.
+    if (!result && !busy && indexOf() < 0) {
+      if (!wild.length) return app.quit();
+      select(0);
     }
-    const frame = !result && s.phase ? C.gold : C.red;
-    s.fill(0, 0, W, H, frame, C.ink);
+    const e = wild.find((w) => same(w, pick)) ?? pick;
+    const id = result?.id ?? e.id;
+    s.fill(0, 0, W, H, C.red, C.ink);
     s.fill(1, 1, W - 2, H - 2, C.cream, C.ink);
+    const top = H - 5; // rows above the tall grass strip
     const sw = Math.min(16, Math.max(8, Math.floor(W / 3) & ~1)), sh = sw / 2;
-    const sy = Math.max(1, Math.floor((H - sh) / 2));
+    const sy = Math.max(1, Math.floor((top - sh) / 2));
     s.image("wild", sprite(id), 3, sy, sw, sh, { dy: !result && s.phase ? 5 : 0 });
     const tx = sw + 6, tw = W - tx - 3;
+
+    // The tall grass: one tile per waiting Pokemon, the chosen one underlined. Click to choose.
+    s.pixel("grass", 3, top, clip(`TALL GRASS ${wild.length}/${WILD_MAX}`, W - 6), "band");
+    wild.forEach((w, i) => {
+      const x = 3 + i * 5, on = same(w, pick);
+      s.fill(x, top + 1, 4, 2, on ? C.gold : C.lcd, C.ink);
+      s.image(`q:${w.id}:${w.at}`, sprite(w.id), x, top + 1, 4, 2);
+      if (on) s.put(x, top + 3, "▀".repeat(4), { fg: C.green });
+      s.hit(x, top + 1, 4, 2, () => { if (!result) select(i); });
+    });
+    const hx = 3 + WILD_MAX * 5;
+    if (W - hx - 2 > 6) {
+      s.pixel("keys1", hx, top + 1, clip("← → CHOOSE", W - hx - 2), "band");
+      s.pixel("keys2", hx, top + 2, clip("Q CLOSE", W - hx - 2), "band");
+    }
+
     if (result) {
       s.pixel("result", tx, sy + 1, clip(result.text.toUpperCase(), tw), "ink");
       return;
     }
-    const left = Math.max(0, Math.ceil((ENCOUNTER_MS - (now - e.at)) / 1000));
-    if (s.phase) s.pixel("bang", tx, 2, "!", "flame");
-    s.pixel("wild", tx + 2, 2, "WILD POKEMON", "band");
-    s.pixel("name", tx, 3, clip(`${nameOf(id).toUpperCase()} APPEARED!`, tw), "ink");
+    s.pixel("wild", tx, 2, "WILD POKEMON", "band");
+    s.pixel("name", tx, 3, clip(nameOf(id).toUpperCase(), tw), "ink");
     s.pixel("odds", tx, 5, clip(`CATCH ${Math.round(throwRate(e) * 100)}%${e.weak ? ` WEAK x${e.weak}` : ""}`, tw), "band");
     let y = 6;
     BALLS.forEach(([ball, label], i) => {
@@ -77,21 +117,16 @@ export function runEncounter() {
     s.pixel("run", tx, y, " R RUN ", "ink");
     s.hit(tx, y, 7, 1, () => run());
     if (note) s.pixel("note", tx, y + 1, clip(note.toUpperCase(), tw), "flame");
-    const late = left <= 10;
-    s.pixel("left", tx, H - 3, clip(`${left} S BEFORE IT FLEES`, tw), late ? "flame" : "band");
-    s.bar(tx, H - 2, tw, left / (ENCOUNTER_MS / 1000), late ? C.flame : C.gold, C.lcdDim);
-  }
-  function run() {
-    if (result) return;
-    const id = game().encounter?.id ?? first.id;
-    call("runAway").catch(() => {});
-    finish(`Got away from ${nameOf(id)}.`, id);
+    s.pixel("left", tx, top - 1, clip(`LEAVES IN ${until(ENCOUNTER_MS - (now - e.at))}`, tw), "band");
   }
   function onEvent(ev) {
     if (ev.key === "1" || ev.key === "enter" || ev.key === " ") toss("poke");
     else if (ev.key === "2") toss("great");
     else if (ev.key === "3") toss("ultra");
-    else if (ev.key === "r" || ev.key === "escape" || ev.key === "q") run();
+    else if (ev.key === "r") run();
+    else if (!result && (ev.key === "right" || ev.key === "l" || ev.key === "tab")) select(Math.max(0, indexOf()) + 1);
+    else if (!result && (ev.key === "left" || ev.key === "h")) select(Math.max(0, indexOf()) - 1);
+    else if (ev.key === "escape" || ev.key === "q") app.quit();
   }
   const app = runApp({ render, onEvent, tick: 400 });
 }
