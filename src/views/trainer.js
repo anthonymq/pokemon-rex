@@ -1,15 +1,21 @@
-// The trainer card: stats, recent catches, badges, quests, the bag and the party. It also hosts
-// the starter choice, the New Pokedex explainer, waiting gifts and the party editor (party.js).
+// The trainer card: stats, recent catches (Professor Oak's steps while the tutorial lasts), badges,
+// quests, the bag and the party. It also hosts the starter choice, the New Pokedex explainer, waiting
+// gifts and the party editor (party.js).
 import { remoteState } from "herdr";
-import { game, partyOf, progress, liveStreak, nameOf, quests, options, BADGES, ITEMS, GIFTS, DAYCARE } from "../game.js";
+import { game, partyOf, progress, liveStreak, nameOf, quests, options, BADGES, ITEMS, GIFTS, DAYCARE, TUTORIAL } from "../game.js";
 import { caught, sprite, badgeArt } from "../core.js";
-import { shareOnX } from "../client.js";
+import { call, shareOnX } from "../client.js";
 import { C, runApp, clip, len } from "../term.js";
 import { plate, section } from "./chrome.js";
 import { makeScreen, firstScreen, trainerProgress } from "./party.js";
 
+// A quest's tier mark: none yet, Bronze, Silver, Gold.
+const TIER_MARK = [null, "B", "S", "G"];
+
 export function runTrainer() {
   let message = "", screen; // undefined until the first state arrives, then null (the card) or a screen
+  // Opening the card is one of Professor Oak's steps.
+  call("seen", "trainer").catch(() => {});
   const open = (name, note = "") => {
     screen = name ? makeScreen(name, { quit: () => app.quit(), done: open }) : null;
     if (note) message = note;
@@ -27,7 +33,7 @@ export function runTrainer() {
     // Two rows of four stats, each on its own band.
     const seen = g.encounters.seen;
     const stats = [
-      ["TRAINER LV", `${tr} · ${g.lifetime}/${next} XP`], ["CAUGHT", `${have.length}/151`], ["TASKS", `${g.tasks}+${g.subtasks} sub`], ["STREAK", `${liveStreak(g)}d best ${g.streak.best}`],
+      ["TRAINER LV", `${tr} · ${g.lifetime}/${next} XP`], ["CAUGHT", `${have.length}/151`], ["TASKS", `${g.tasks}+${g.subtasks} sub`], [`STREAK · ${g.streak.freezes ?? 0} FREEZE${g.streak.freezes === 1 ? "" : "S"}`, `${liveStreak(g)}d best ${g.streak.best}`],
       ["ENCOUNTERS", seen], ["WILD CATCHES", g.encounters.caught], ["FLED", g.encounters.fled], ["CATCH RATE", seen ? `${Math.round((g.encounters.caught / seen) * 100)}%` : "-"],
     ];
     const sw = Math.floor((W - 2) / 4);
@@ -39,14 +45,24 @@ export function runTrainer() {
     });
     y += 6;
 
-    // Recent catches.
-    section(s, "h:recent", 2, y, "RECENT CATCHES", W - 4);
-    if (!g.recent.length) s.put(2, y + 2, "None yet. Wild Pokemon wait in the tall grass after finished tasks.".slice(0, W - 4), { fg: C.soft });
-    g.recent.slice(0, Math.floor((W - 4) / 7)).forEach((r, i) => {
-      const x = 2 + i * 7, shiny = g.shiny.includes(r.id);
-      s.fill(x, y + 1, 6, 3, shiny ? C.gold : C.lcd, C.ink);
-      s.image(`r:${i}:${r.id}`, sprite(r.id), x, y + 1, 6, 3);
-    });
+    // Professor Oak's first steps while the tutorial lasts, then recent catches.
+    if (Array.isArray(g.tutorial)) {
+      section(s, "h:oak", 2, y, `PROFESSOR OAK · ${g.tutorial.length}/${TUTORIAL.length} · 5 Poke Balls and your Pokedex`, W - 4);
+      const colW = Math.floor((W - 4) / 2);
+      TUTORIAL.forEach((t, i) => {
+        const x = 2 + Math.floor(i / 3) * colW, done = g.tutorial.includes(t.id);
+        s.put(x, y + 1 + (i % 3), done ? "✓" : "·", { fg: done ? C.done : C.cyan, bold: true });
+        s.put(x + 2, y + 1 + (i % 3), clip(t.goal, colW - 3), { fg: done ? C.done : C.lcd });
+      });
+    } else {
+      section(s, "h:recent", 2, y, "RECENT CATCHES", W - 4);
+      if (!g.recent.length) s.put(2, y + 2, "None yet. Wild Pokemon wait in the tall grass after finished tasks.".slice(0, W - 4), { fg: C.soft });
+      g.recent.slice(0, Math.floor((W - 4) / 7)).forEach((r, i) => {
+        const x = 2 + i * 7, shiny = g.shiny.includes(r.id);
+        s.fill(x, y + 1, 6, 3, shiny ? C.gold : C.lcd, C.ink);
+        s.image(`r:${i}:${r.id}`, sprite(r.id), x, y + 1, 6, 3);
+      });
+    }
     y += 5;
 
     // Badges: earned ones show their art, locked ones an empty socket.
@@ -64,19 +80,29 @@ export function runTrainer() {
 
     // Quests and the bag, side by side.
     const half = Math.floor((W - 3) / 2);
-    section(s, "h:quests", 2, y, "QUESTS", half - 2);
-    quests(g).forEach((q, i) => {
-      s.put(2, y + 1 + i, q.done ? "✓" : q.weekly ? "W" : "·", { fg: q.done ? C.done : C.cyan, bold: true });
-      s.put(4, y + 1 + i, clip(q.goal, half - 12), { fg: q.done ? C.done : C.lcd });
-      s.pixel(`q:${i}`, half - 5, y + 1 + i, `${q.n}/${q.need}`, q.done ? "lcd" : "soft");
+    // Each quest has Bronze, Silver and Gold, sized to the player's own pace: the mark is the tier
+    // reached, the count heads for the next one. A daily quest with no tier yet can be rerolled once a day.
+    section(s, "h:quests", 2, y, "QUESTS · B S G", half - 2);
+    const qs = quests(g);
+    qs.forEach((q, i) => {
+      const mark = TIER_MARK[q.tier] ?? (q.weekly ? "W" : "·");
+      s.put(2, y + 1 + i, mark, { fg: q.tier >= 3 ? C.gold : q.tier ? C.amber : C.cyan, bold: true });
+      s.put(4, y + 1 + i, clip(`${q.rerollable ? `${i + 1} ` : ""}${q.goal}`, half - 12), { fg: q.done ? C.done : C.lcd });
+      s.pixel(`q:${i}`, half - 5, y + 1 + i, q.done ? "GOLD" : `${q.n}/${q.need}`, q.done ? "lcd" : "soft");
+      if (q.rerollable) s.hit(2, y + 1 + i, half - 2, 1, () => reroll(q));
     });
     section(s, "h:bag", half + 3, y, "BAG", W - half - 5);
-    const bag = Object.entries(g.bag).filter(([, n]) => n > 0);
-    if (!bag.length) s.put(half + 3, y + 1, "empty", { fg: C.soft });
-    bag.slice(0, 4).forEach(([item, n], i) => {
-      s.put(half + 3, y + 1 + i, "●", { fg: ITEMS[item]?.color ?? C.lcd });
-      s.put(half + 5, y + 1 + i, clip(ITEMS[item]?.name ?? item, W - half - 12), { fg: C.lcd });
-      s.pixel(`bag:${item}`, W - 2 - len(`x${n}`), y + 1 + i, `x${n}`, "soft");
+    // PokeDollars and Rested XP sit with the items.
+    const rows = [
+      ...(g.money ? [["money", "PokeDollars", C.gold, `P${g.money}`]] : []),
+      ...(g.rested ? [["rested", "Rested: XP x2", C.cyan, `${g.rested} XP`]] : []),
+      ...Object.entries(g.bag).filter(([, n]) => n > 0).map(([item, n]) => [item, ITEMS[item]?.name ?? item, ITEMS[item]?.color ?? C.lcd, `x${n}`]),
+    ];
+    if (!rows.length) s.put(half + 3, y + 1, "empty", { fg: C.soft });
+    rows.slice(0, 5).forEach(([key, name, color, n], i) => {
+      s.put(half + 3, y + 1 + i, "●", { fg: color });
+      s.put(half + 5, y + 1 + i, clip(name, W - half - 14), { fg: C.lcd });
+      s.pixel(`bag:${key}`, W - 2 - len(n), y + 1 + i, n, "soft");
     });
     y += 6;
 
@@ -112,7 +138,15 @@ export function runTrainer() {
     });
     s.fill(0, H - 1, W, 1, C.red, C.cream);
     const o = options();
-    s.put(2, H - 1, clip(message || `${party.length ? "p party" : "c starter"} · s share on X · q close · alert ${o.alert} · hard mode ${o.hardMode ? "on" : "off"} (pokedex set)`, W - 4), { fg: C.cream });
+    const rerolls = qs.some((q) => q.rerollable) ? " · 1-3 reroll a quest" : "";
+    s.put(2, H - 1, clip(message || `${party.length ? "p party" : "c starter"}${rerolls} · s share on X · q close · alert ${o.alert} · hard mode ${o.hardMode ? "on" : "off"} (pokedex set)`, W - 4), { fg: C.cream });
+  }
+  function reroll(q) {
+    message = "Rerolling...";
+    call("rerollQuest", q.id).then(
+      () => { message = "A new quest for today"; },
+      (error) => { message = `Reroll failed: ${error.message}`; },
+    );
   }
   function share() {
     message = "Opening X...";
@@ -128,6 +162,8 @@ export function runTrainer() {
     if (ev.key === "p") open(g.party.length ? "party" : "starter");
     if (ev.key === "c" && !g.party.length) open("starter");
     if (ev.key === "g" && g.gifts.pending.length) open("gift");
+    const q = ["1", "2", "3"].includes(ev.key) ? quests(g)[Number(ev.key) - 1] : null;
+    if (q?.rerollable) reroll(q);
     if (ev.key === "s" || ev.key === "ctrl+s") share();
     if (ev.key === "escape" || ev.key === "q" || ev.key === "enter") app.quit();
   }

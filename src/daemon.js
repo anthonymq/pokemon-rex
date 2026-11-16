@@ -45,6 +45,18 @@ export async function headOf(cwd) {
     return null;
   }
 }
+// The branch checked out, for quest variety; null when detached or not a repo.
+export async function branchOf(cwd) {
+  if (!cwd) return null;
+  try {
+    const proc = Bun.spawn(["git", "rev-parse", "--abbrev-ref", "HEAD"], { cwd, stdout: "pipe", stderr: "ignore", stdin: "ignore", timeout: 3000 });
+    const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    const name = out.trim();
+    return code === 0 && name && name !== "HEAD" ? name : null;
+  } catch {
+    return null;
+  }
+}
 // HEAD moved to a commit made since the turn started (not a checkout of an older one).
 export const committed = (before, after, since) => Boolean(before && after && after.hash !== before.hash && after.at >= since - 1000);
 function reportCommit(session, project, cwd, turn, finished) {
@@ -104,11 +116,12 @@ function track(block, b) {
     const prev = b.since;
     if (prev?.s !== s) {
       // A turn starts with the first working state and lasts through blocked spells until idle.
-      if (s === "working" && !b.turn) b.turn = { at: now, head: headOf(b.cwd) };
+      if (s === "working" && !b.turn) b.turn = { at: now, head: headOf(b.cwd), branch: branchOf(b.cwd) };
       // Done and idle count as one. A working agent going quiet finished a task.
       if (prev?.s === "working" && s === "idle") {
         log(`task finished in ${projectLabel(project)} after ${Math.round((now - prev.at) / 1000)}s (${app ?? "?"})`);
-        const finished = send("taskFinished", project, partnerOf(project), now - prev.at, app);
+        const partner = partnerOf(project), ms = now - prev.at;
+        const finished = Promise.resolve(b.turn?.branch ?? null).then((branch) => send("taskFinished", project, partner, ms, app, branch));
         if (b.turn) reportCommit(b.session, project, b.cwd, b.turn, finished);
       }
       if (s === "idle") b.turn = null;

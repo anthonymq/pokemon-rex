@@ -3,12 +3,12 @@
 // edit mods/pokedex-agents/game.js and run scripts/sync-game.sh (the repo checks the copies match).
 // State lives in shared("pokedex.game"):
 // { party: [ids] (the first leads), pokemon: {id: xp}, lifetime, bank, gifts: {got, pending}, results: {project: [kinds]},
-//   seen: [keys], tasks, subtasks, evolutions, streak: {last, days, best}, badges: [ids], shiny: [ids],
+//   seen: [keys], tasks, subtasks, evolutions, streak: {last, days, best, freezes, active}, badges: [ids], shiny: [ids],
 //   wild: [{id, at, balls, weak, project}] (the tall grass queue, oldest first), encounter: wild[0] | null,
 //   encounters: {seen, caught, fled}, recent: [{id, at}], bag: {item: n}, dex: {id: {at, project, how}},
-//   fainted: {project: true}, happy: {project: true}, quests: {day, week, d, w}, lastTurn,
-//   digest: {levels, items: {item: n}, quests}, version,
-//   stats: {days: {day: {turns, ms, seen, caught, fled, left, quests}}, lengths: [ms]} }
+//   fainted: {project: true}, happy: {project: true}, quests: {day, week, d, w, daily, spare, weekly, rerolled},
+//   lastTurn, digest: {levels, items: {item: n}, quests}, version, rested, money, tutorial: [step ids] | null,
+//   stats: {days: {day: {turns, ms, xp, seen, caught, fled, left, fast, long, variety, quests, gold, frozen}}, lengths: [ms]} }
 // Options live in shared("pokedex.options"): {alert: "off" | "on" | "smart", hardMode}.
 // `stats` is private: it stays in the local save and is never shared.
 // A project key is the space's git repo root (machine-qualified for remote spaces), else its name.
@@ -70,6 +70,7 @@ const TARGETS = [...Object.values(EVOLVE).map(([to]) => to), ...Object.values(IT
 const FINAL = new Set(TARGETS.filter((to) => !EVOLVE[to] && !ITEM_EVOLVE[to]));
 
 export const ITEMS = {
+  poke: { name: "Poke Ball", color: "#ef6b4a", bonus: 1 },
   great: { name: "Great Ball", color: "#5aa9e6", bonus: 1.5 },
   ultra: { name: "Ultra Ball", color: "#f2c94c", bonus: 2 },
   fire: { name: "Fire Stone", color: "#ef6b4a" },
@@ -86,10 +87,10 @@ export const BADGES = [
   { id: "boulder", name: "Boulder", color: "#a8a29a", goal: "Catch 10 Pokemon", test: (g, c) => c >= 10 },
   { id: "cascade", name: "Cascade", color: "#5aa9e6", goal: "Finish 50 agent tasks", test: (g) => g.tasks >= 50 },
   { id: "thunder", name: "Thunder", color: "#f2c94c", goal: "Evolve a partner", test: (g) => g.evolutions >= 1 },
-  { id: "rainbow", name: "Rainbow", color: "#9be29b", goal: "Reach a 3-day streak", test: (g) => g.streak.best >= 3 },
+  { id: "rainbow", name: "Rainbow", color: "#9be29b", goal: "Keep a 2-week streak", test: (g) => g.streak.best >= 14 },
   { id: "soul", name: "Soul", color: "#e58ad6", goal: "Catch 75 Pokemon", test: (g, c) => c >= 75 },
   { id: "marsh", name: "Marsh", color: "#d4af37", goal: "Finish 500 agent tasks", test: (g) => g.tasks >= 500 },
-  { id: "volcano", name: "Volcano", color: "#ef6b4a", goal: "Reach a 30-day streak", test: (g) => g.streak.best >= 30 },
+  { id: "volcano", name: "Volcano", color: "#ef6b4a", goal: "Keep an 8-week streak", test: (g) => g.streak.best >= 56 },
   { id: "earth", name: "Earth", color: "#5fbf77", goal: "Catch all 151", test: (g, c) => c >= 151 },
   // Ranks past the gyms: drawn as medals, not badge art.
   { id: "elite", name: "Elite Four", rank: true, color: "#8e7cc3", goal: "Finish 1000 agent tasks", test: (g) => g.tasks >= 1000 },
@@ -104,12 +105,14 @@ export function game() {
     // A brand-new save has nothing to explain: the Phase 2 explainer is for migrated saves.
     seen: g.seen ?? (Object.keys(g).length ? [] : ["phase2"]),
     tasks: g.tasks ?? 0, subtasks: g.subtasks ?? 0, evolutions: g.evolutions ?? 0,
-    streak: g.streak ?? { last: null, days: 0, best: 0 },
+    streak: { last: null, days: 0, best: 0, freezes: 0, active: 0, ...g.streak },
     badges: g.badges ?? [], shiny: g.shiny ?? [],
     wild: g.wild ?? (g.encounter ? [g.encounter] : []), encounter: g.wild?.[0] ?? g.encounter ?? null,
     encounters: g.encounters ?? { seen: 0, caught: 0, fled: 0 }, recent: g.recent ?? [],
     bag: g.bag ?? {}, dex: g.dex ?? {}, fainted: g.fainted ?? {}, happy: g.happy ?? {}, quests: g.quests ?? null,
-    lastTurn: g.lastTurn ?? null, digest: g.digest ?? blankDigest(),
+    lastTurn: g.lastTurn ?? null, digest: g.digest ?? blankDigest(), rested: g.rested ?? 0, money: g.money ?? 0,
+    // Professor Oak's steps done so far; null once finished, and for saves from before the tutorial.
+    tutorial: g.tutorial !== undefined ? g.tutorial : Object.keys(g).length ? null : [],
     // A save written before versioning is version 1; a brand-new one starts at the current version.
     version: g.version ?? (Object.keys(g).length ? 1 : SAVE_VERSION), stats: g.stats ?? blankStats(),
   };
@@ -120,11 +123,18 @@ export function game() {
 //   1 -> 2: local stats.
 //   2 -> 3: the tall grass queue (the waiting encounter joins it); fainting became hard mode only.
 //   3 -> 4: one party instead of a partner per project (see fromProjects).
-export const SAVE_VERSION = 4;
+//   4 -> 5: active-day streaks (the streak and its best carry over, with a Streak Freeze per 7 active
+//           days already recorded, up to 2); no tutorial for a save that already played.
+export const SAVE_VERSION = 5;
 const MIGRATIONS = {
   1: (g) => ({ ...g, stats: g.stats ?? blankStats() }),
   2: (g) => ({ ...g, wild: g.wild ?? (g.encounter ? [g.encounter] : []), fainted: {}, happy: g.happy ?? {} }),
   3: (g) => fromProjects(g),
+  4: (g) => {
+    const active = Object.values(g.stats?.days ?? {}).filter((d) => d.turns > 0).length;
+    const streak = { last: null, days: 0, best: 0, ...g.streak, freezes: Math.min(FREEZE_MAX, Math.floor(active / FREEZE_EVERY)), active };
+    return { ...g, streak, tutorial: null, rested: 0, money: g.money ?? 0 };
+  },
 };
 // Writes the game; `encounter` mirrors the head of the queue for views that show one Pokemon.
 function put(g) {
@@ -161,6 +171,7 @@ export function digest(g0 = null) {
   const parts = [
     wild && `${wild} wild Pokemon waiting`, d.levels && `${d.levels} level-up${d.levels > 1 ? "s" : ""}`,
     items.length && `found ${items.join(", ")}`, d.quests && `${d.quests} quest${d.quests > 1 ? "s" : ""} done`,
+    g.rested > 0 && `rested: your next ${g.rested} XP count double`,
   ].filter(Boolean);
   g.digest = blankDigest();
   if (!g0) put(g);
@@ -206,14 +217,19 @@ function fromProjects(g) {
 const STATS_DAYS = 90; // days kept
 const STATS_LENGTHS = 200; // recent turn lengths kept for the median
 const blankStats = () => ({ days: {}, lengths: [] });
-const blankDay = () => ({ turns: 0, ms: 0, seen: 0, caught: 0, fled: 0, left: 0, quests: 0 });
-// Adds n to today's `key`. Mutates g.
-function tally(g, key, n = 1) {
+// `fast`: blocked agents answered within FAST_MS; `long`: turns of 10+ minutes; `variety`: the most
+// branches, agents or repos used that day; `gold`: daily quests that reached Gold; `frozen`: a day
+// a Streak Freeze covered.
+const blankDay = () => ({ turns: 0, ms: 0, xp: 0, seen: 0, caught: 0, fled: 0, left: 0, fast: 0, long: 0, variety: 0, quests: 0, gold: 0 });
+// Adds n to today's `key` (or raises it to n with `max`). Mutates g.
+function tally(g, key, n = 1, max = false) {
   const s = g.stats ?? blankStats(), k = day(new Date());
   const today = { ...blankDay(), ...s.days[k] };
-  today[key] += n;
+  today[key] = max ? Math.max(today[key], n) : today[key] + n;
   g.stats = { ...s, days: { ...s.days, [k]: today } };
 }
+// The active days among the `span` days before day key `end` (not included).
+const before = (g, end, span) => Array.from({ length: span }, (_, i) => g.stats.days[addDays(end, -1 - i)]).filter((d) => d?.turns > 0);
 const median = (xs) => {
   if (!xs.length) return 0;
   const s = [...xs].sort((a, b) => a - b), m = s.length >> 1;
@@ -224,7 +240,7 @@ const median = (xs) => {
 export function localStats(g = game(), now = new Date(), span = 14) {
   const keys = new Set(Array.from({ length: span }, (_, i) => day(new Date(now.getFullYear(), now.getMonth(), now.getDate() - i))));
   const days = Object.entries(g.stats.days).filter(([k, d]) => keys.has(k) && d.turns > 0).map(([, d]) => d);
-  const sum = (key) => days.reduce((n, d) => n + d[key], 0);
+  const sum = (key) => days.reduce((n, d) => n + (d[key] ?? 0), 0);
   return {
     span, activeDays: days.length, turnsPerDay: median(days.map((d) => d.turns)), medianTurnMs: median(g.stats.lengths),
     turns: sum("turns"), seen: sum("seen"), caught: sum("caught"), fled: sum("fled"), left: sum("left") || 0, quests: sum("quests"),
@@ -241,24 +257,45 @@ export function progress(xp) {
 }
 // The trainer level grows with lifetime XP, the same however many projects earned it.
 export const trainerLevel = (g) => Math.max(1, Math.floor(Math.sqrt((g.lifetime ?? 0) / 40)));
-// True when the streak's last day is yesterday, or only a weekend lies between it and today:
-// weekends never break a streak.
-function streakAlive(last, now = new Date()) {
-  if (!last) return false;
-  for (let i = 1; i <= 3; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
-    if (day(d) === last) return true;
-    if (d.getDay() !== 0 && d.getDay() !== 6) return false;
+// --- Active-day streaks: a day keeps the streak when 5 of the 7 days ending with it were active, so
+// any two days off a week (weekends or not) are fine. The streak counts those days. A Streak Freeze,
+// earned every 7 active days (2 at most), covers a missing day when the streak would break.
+export const STREAK_WINDOW = 7, STREAK_NEED = 5, FREEZE_EVERY = 7, FREEZE_MAX = 2;
+// Walks the streak from the day after its last one through day key `until`, spending freezes where
+// they save it. With `write`, saves the result and marks the frozen days. Returns the streak.
+function walkStreak(g, until, write) {
+  const s = { ...g.streak };
+  const frozen = new Set();
+  const counts = (k) => g.stats.days[k]?.turns > 0 || !!g.stats.days[k]?.frozen || frozen.has(k);
+  for (let k = s.last ? addDays(s.last, 1) : until; k <= until; k = addDays(k, 1)) {
+    const win = Array.from({ length: STREAK_WINDOW }, (_, i) => addDays(k, -i));
+    let n = win.filter(counts).length;
+    const missing = STREAK_NEED - n;
+    if (missing > 0 && s.days > 0 && missing <= s.freezes) {
+      for (const x of win.filter((x) => !counts(x)).slice(0, missing)) frozen.add(x);
+      s.freezes -= missing;
+      n = STREAK_NEED;
+    }
+    s.days = n >= STREAK_NEED ? s.days + 1 : 0;
+    s.best = Math.max(s.best, s.days);
+    s.last = k;
   }
-  return false;
+  if (write) {
+    g.streak = s;
+    for (const x of frozen) g.stats = { ...g.stats, days: { ...g.stats.days, [x]: { ...blankDay(), ...g.stats.days[x], frozen: 1 } } };
+  }
+  return s;
 }
-// Today's streak, which lapses when a weekday passed with no finished task.
+// Today's streak: what it is through yesterday when today has no finished task yet.
 export function liveStreak(g, now = new Date()) {
-  const s = g.streak;
-  return s.last === day(now) || streakAlive(s.last, now) ? s.days : 0;
+  const k = day(now);
+  if (!g.streak.last) return 0;
+  if (g.streak.last >= k) return g.streak.days;
+  return walkStreak(g, addDays(k, -1), false).days;
 }
 
 const day = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const addDays = (k, n) => { const [y, m, d] = k.split("-").map(Number); return day(new Date(y, m - 1, d + n)); };
 // A week is named by its Monday.
 const week = (d) => day(new Date(d.getFullYear(), d.getMonth(), d.getDate() - (d.getDay() + 6) % 7));
 const hash = (s) => [...s].reduce((h, c) => Math.imul(h ^ c.codePointAt(0), 16777619) >>> 0, 2166136261);
@@ -309,62 +346,131 @@ export function checkBadges() {
   save(game());
 }
 
-// Quests: three daily ones and one weekly one, picked from the date so every screen agrees.
-const DAILY = [
-  { id: "d-tasks", goal: "Finish 5 agent tasks", need: 5, n: (q) => q.tasks },
-  { id: "d-projects", goal: "Work in 2 projects", need: 2, n: (q) => q.projects.length },
-  { id: "d-agents", goal: "Finish tasks with 2 different agents", need: 2, n: (q) => q.agents.length },
-  { id: "d-catch", goal: "Catch a wild Pokemon", need: 1, n: (q) => q.catches },
-  { id: "d-fast", goal: "Answer a blocked agent within 2 minutes", need: 1, n: (q) => q.fast },
-  { id: "d-long", goal: "Finish a task that ran 10+ minutes", need: 1, n: (q) => q.long },
+// --- Quests sized to the player: three daily ones (always a task quest, plus two that the player's last
+// 30 days show they can do) and one weekly one. Each has Bronze / Silver / Gold thresholds at 50% /
+// 100% / 150% of the player's own median over the 14 days before (a weekly one: their weekly average),
+// never under a minimum, and every tier pays. The set is fixed when the day or week starts.
+export const TIERS = ["Bronze", "Silver", "Gold"];
+const RATIOS = [0.5, 1, 1.5];
+const variety = (c) => Math.max(c.projects.length, c.agents.length, c.branches.length);
+const plural = (n) => (n > 1 ? "s" : "");
+const QUESTS = [
+  { id: "tasks", stat: "turns", min: [2, 3, 5], weeklyMin: [5, 10, 15], n: (c) => c.tasks, goal: (n) => `Finish ${n} agent task${plural(n)}` },
+  { id: "catch", stat: "caught", min: [1, 2, 3], weeklyMin: [2, 3, 5], n: (c) => c.catches, goal: (n) => `Catch ${n} wild Pokemon` },
+  { id: "fast", stat: "fast", min: [1, 2, 3], weeklyMin: [2, 3, 5], n: (c) => c.fast, goal: (n) => `Answer ${n} blocked agent${plural(n)} within 2 minutes` },
+  { id: "long", stat: "long", min: [1, 2, 3], weeklyMin: [2, 3, 5], n: (c) => c.long, goal: (n) => `Finish ${n} task${plural(n)} that ran 10+ minutes` },
+  // Daily only: 2 branches or 2 agents or 2 repos all count, so one repo is no handicap.
+  { id: "variety", stat: "variety", min: [2, 3, 4], n: variety, goal: (n) => `Show variety: ${n} branches, agents or repos` },
 ];
-const WEEKLY = [
-  { id: "w-tasks", goal: "Finish 40 agent tasks", need: 40, n: (q) => q.tasks },
-  { id: "w-catch", goal: "Catch 5 wild Pokemon", need: 5, n: (q) => q.catches },
-  { id: "w-evolve", goal: "Evolve a partner", need: 1, n: (q) => q.evolutions },
-  { id: "w-projects", goal: "Work in 4 projects", need: 4, n: (q) => q.projects.length },
-];
-const blankCount = () => ({ tasks: 0, projects: [], agents: [], catches: 0, fast: 0, long: 0, evolutions: 0, done: [] });
-function picks(now = new Date()) {
-  const h = hash(day(now));
-  const daily = [...DAILY].sort((a, b) => hash(a.id + h) - hash(b.id + h)).slice(0, 3);
-  return { daily, weekly: WEEKLY[hash(week(now)) % WEEKLY.length] };
+const questDef = (id) => QUESTS.find((x) => x.id === id);
+// What each tier pays; `stone` is the week's stone, `money` PokeDollars.
+const DAILY_PAY = [{ great: 1 }, { great: 2 }, { ultra: 1, money: 50 }];
+const WEEKLY_PAY = [{ ultra: 1 }, { ultra: 1, stone: 1 }, { ultra: 1, money: 200 }];
+const weekStone = (wk) => STONES[hash(wk) % STONES.length];
+const payText = (pay, wk) => Object.entries(pay).map(([k, n]) => (k === "money" ? `${n} PokeDollars` : `${n} ${ITEMS[k === "stone" ? weekStone(wk) : k].name}${plural(n)}`)).join(" + ");
+function pay(g, p, wk) {
+  for (const [k, n] of Object.entries(p)) {
+    if (k === "money") g.money += n;
+    else gain(g, k === "stone" ? weekStone(wk) : k, n);
+  }
 }
-// This period's counters, fresh when the day or week turned. Mutates g.
+// Thresholds from a base (a median or a weekly average): each tier at least its minimum and above the
+// tier before it.
+function needs(min, base) {
+  const out = [];
+  for (const [i, r] of RATIOS.entries()) out.push(Math.max(min[i], Math.ceil(r * base - 1e-9), (out[i - 1] ?? 0) + 1));
+  return out;
+}
+// Day `k`'s candidates, best first: the task quest, then every quest the best of the last 30 days
+// would have reached Bronze in, shuffled by the date. The first three are offered; the rest are rerolls.
+function planDay(g, k) {
+  const recent = before(g, k, 14), month = before(g, k, 30);
+  const h = hash(k);
+  const fits = QUESTS.map((x) => ({ id: x.id, need: needs(x.min, median(recent.map((d) => d[x.stat] ?? 0))) }))
+    .filter((q) => q.id === "tasks" || Math.max(0, ...month.map((d) => d[questDef(q.id).stat] ?? 0)) >= q.need[0]);
+  const [core, ...rest] = fits;
+  return [core, ...rest.sort((a, b) => hash(a.id + h) - hash(b.id + h))];
+}
+// Week `wk`'s quest: one of those whose Bronze the player's weekly average reaches (the task one always).
+function planWeek(g, wk) {
+  const recent = before(g, wk, 14);
+  const fits = QUESTS.filter((x) => x.weeklyMin).map((x) => {
+    const base = recent.reduce((n, d) => n + (d[x.stat] ?? 0), 0) / 2;
+    return { id: x.id, need: needs(x.weeklyMin, base), base };
+  }).filter((q) => q.id === "tasks" || q.base >= q.need[0]);
+  const { base, ...q } = fits[hash(wk) % fits.length];
+  return q;
+}
+const blankCount = () => ({ tasks: 0, projects: [], agents: [], branches: [], catches: 0, fast: 0, long: 0, evolutions: 0, tiers: {} });
+// This period's quests and counters, fresh when the day or week turned. Mutates g.
 function questState(g, now = new Date()) {
   const q = g.quests ?? {};
-  const d = q.day === day(now) ? q.d : blankCount();
-  const w = q.week === week(now) ? q.w : blankCount();
-  g.quests = { day: day(now), week: week(now), d, w };
+  const k = day(now), wk = week(now);
+  const today = q.day === k && q.daily ? { daily: q.daily, spare: q.spare ?? [], rerolled: !!q.rerolled } : (() => {
+    const plan = planDay(g, k);
+    return { daily: plan.slice(0, 3), spare: plan.slice(3), rerolled: false };
+  })();
+  g.quests = {
+    day: k, week: wk, ...today,
+    weekly: q.week === wk && q.weekly ? q.weekly : planWeek(g, wk),
+    d: q.day === k ? { ...blankCount(), ...q.d } : blankCount(),
+    w: q.week === wk ? { ...blankCount(), ...q.w } : blankCount(),
+  };
   return g.quests;
 }
-// Today's and this week's quests with their progress, for the trainer card.
+// Today's and this week's quests with their progress, for the trainer card. `tier`: tiers reached (0-3);
+// `need` and `reward`: the next tier's; `done`: Gold reached.
 export function quests(g = game(), now = new Date()) {
   const q = questState({ ...g }, now);
-  const { daily, weekly } = picks(now);
-  const view = (x, c, weekly) => ({ id: x.id, goal: x.goal, need: x.need, n: Math.min(x.need, x.n(c)), done: c.done.includes(x.id), weekly, reward: weekly ? "2 Ultra Balls + a stone" : "2 Great Balls" });
-  return [...daily.map((x) => view(x, q.d, false)), view(weekly, q.w, true)];
+  const view = (x, c, weekly) => {
+    const def = questDef(x.id), tier = c.tiers[x.id] ?? 0, need = x.need[Math.min(tier, 2)];
+    return {
+      id: `${weekly ? "w" : "d"}-${x.id}`, goal: def.goal(need), need, needs: x.need, n: Math.min(need, def.n(c)), tier, done: tier >= 3, weekly,
+      reward: tier < 3 ? payText((weekly ? WEEKLY_PAY : DAILY_PAY)[tier], q.week) : null,
+      rerollable: !weekly && !q.rerolled && tier === 0 && x.id !== "tasks" && q.spare.length > 0,
+    };
+  };
+  return [...q.daily.map((x) => view(x, q.d, false)), view(q.weekly, q.w, true)];
 }
-// Counts something toward both periods' quests and pays out the ones it completes. Mutates g.
+// Counts something toward both periods' quests and pays every tier it reaches. Mutates g.
 function bump(g, fn) {
   const q = questState(g);
   fn(q.d);
   fn(q.w);
-  const { daily, weekly: week1 } = picks();
-  for (const [x, c, weekly] of [...daily.map((x) => [x, q.d, false]), [week1, q.w, true]]) {
-    if (c.done.includes(x.id) || x.n(c) < x.need) continue;
-    c.done = [...c.done, x.id];
-    tally(g, "quests");
-    remember(g, "quests");
-    let reward = "2 Great Balls";
-    if (weekly) {
-      const stone = STONES[hash(q.week) % STONES.length];
-      gain(g, "ultra", 2);
-      gain(g, stone);
-      reward = `2 Ultra Balls and a ${ITEMS[stone].name}`;
-    } else gain(g, "great", 2);
-    notify({ title: `${weekly ? "Weekly" : "Daily"} quest complete!`, body: `${x.goal}: ${reward}.`, level: "success", quiet: true });
+  for (const [x, c, weekly] of [...q.daily.map((x) => [x, q.d, false]), [q.weekly, q.w, true]]) {
+    const def = questDef(x.id), n = def.n(c);
+    let tier = c.tiers[x.id] ?? 0;
+    for (; tier < 3 && n >= x.need[tier]; tier++) {
+      const p = (weekly ? WEEKLY_PAY : DAILY_PAY)[tier];
+      pay(g, p, q.week);
+      if (tier === 0) {
+        tally(g, "quests");
+        remember(g, "quests");
+      }
+      if (tier === 2 && !weekly) tally(g, "gold");
+      notify({ title: `${weekly ? "Weekly" : "Daily"} quest: ${TIERS[tier]}!`, body: `${def.goal(x.need[tier])}: ${payText(p, q.week)}.`, level: "success", quiet: true });
+    }
+    c.tiers = { ...c.tiers, [x.id]: tier };
   }
+}
+// Swaps one of today's quests (not the task one, nor one that already paid) for another that fits:
+// once a day.
+export function rerollQuest(id) {
+  const g = game();
+  const q = questState(g);
+  const bare = String(id).replace(/^d-/, "");
+  const i = q.daily.findIndex((x) => x.id === bare);
+  if (q.rerolled) throw new Error("one reroll a day: try again tomorrow");
+  if (i < 0 || bare === "tasks") throw new Error("only today's quests other than the task quest can be rerolled");
+  if ((q.d.tiers[bare] ?? 0) > 0) throw new Error("that quest already paid out");
+  if (!q.spare.length) throw new Error("no other quest fits your last 30 days yet");
+  const [next, ...spare] = q.spare;
+  q.spare = [...spare, q.daily[i]];
+  q.daily = q.daily.map((x, j) => (j === i ? next : x));
+  q.rerolled = true;
+  bump(g, () => {}); // a new quest already met pays at once
+  put(g);
+  return `d-${next.id}`;
 }
 const addOnce = (list, v) => (v && !list.includes(v) ? [...list, v] : list);
 
@@ -431,6 +537,11 @@ function grow(g, id, amount) {
 // something evolved.
 function award(g, amount) {
   if (amount <= 0) return false;
+  tally(g, "xp", amount);
+  // Rested XP doubles what comes in until it runs out.
+  const bonus = Math.min(g.rested, amount);
+  g.rested -= bonus;
+  amount += bonus;
   g.lifetime += amount;
   gifts(g);
   if (!g.party.length) {
@@ -462,16 +573,59 @@ export function setParty(ids) {
   if (!Array.isArray(ids) || !ids.length || ids.length > PARTY_MAX || new Set(ids).size !== ids.length) throw new Error(`a party is 1 to ${PARTY_MAX} different Pokemon`);
   const missing = ids.find((id) => !caught.includes(id));
   if (missing) throw new Error(`${nameOf(missing)} isn't in your Pokedex`);
-  put({ ...game(), party: ids });
+  const g = game();
+  if (g.party.length && g.party[0] !== ids[0]) learn(g, "lead");
+  g.party = ids;
+  put(g);
   return ids;
 }
 // Puts a Pokemon from the Pokedex at the head of the party (the previous lead stays in it, room allowing).
 export const setLead = (id) => setParty([id, ...game().party.filter((x) => x !== id)].slice(0, PARTY_MAX));
 
-// Marks a one-time screen ("phase2": the New Pokedex explainer) as seen.
+// Marks a one-time screen ("phase2": the New Pokedex explainer) as seen. "trainer": the trainer card
+// opened, a tutorial step.
 export function markSeen(key) {
   const g = game();
-  if (!g.seen.includes(key)) put({ ...g, seen: [...g.seen, key] });
+  const before = JSON.stringify([g.seen, g.tutorial]);
+  if (!g.seen.includes(key) && key !== "trainer") g.seen = [...g.seen, key];
+  if (key === "trainer") learn(g, "trainer");
+  if (JSON.stringify([g.seen, g.tutorial]) !== before) put(g);
+}
+
+// --- Professor Oak's tutorial, for a new save: five first steps, then 5 Poke Balls and the Pokedex.
+export const TUTORIAL = [
+  { id: "agent", goal: "Open an agent" },
+  { id: "task", goal: "Finish a task" },
+  { id: "catch", goal: "Catch your first wild Pokemon" },
+  { id: "lead", goal: "Change your lead partner" },
+  { id: "trainer", goal: "Open the trainer card" },
+];
+// A tutorial step done; the last one pays. Mutates g.
+function learn(g, id) {
+  if (!g.tutorial || g.tutorial.includes(id)) return;
+  g.tutorial = [...g.tutorial, id];
+  if (!TUTORIAL.every((t) => g.tutorial.includes(t.id))) return;
+  g.tutorial = null;
+  gain(g, "poke", 5);
+  notify({ title: "Professor Oak: well done!", body: "Here is your Pokedex, and 5 Poke Balls to fill it.", level: "success" });
+}
+
+// --- Rested XP: each day off beyond the two a week a streak allows (a day whose last 7 days held fewer
+// than STREAK_NEED active ones) banks one day of the player's average XP, up to RESTED_DAYS of it, and
+// XP counts double until the bank is spent. A usual weekend banks nothing. Runs on the first turn of a
+// day, before `lastTurn` moves.
+export const RESTED_DAYS = 3;
+function rest(g, today) {
+  if (!g.lastTurn) return;
+  let away = 0;
+  for (let k = addDays(day(new Date(g.lastTurn)), 1); k < today && away < RESTED_DAYS; k = addDays(k, 1)) {
+    const active = Array.from({ length: STREAK_WINDOW }, (_, i) => g.stats.days[addDays(k, -i)]).filter((d) => d?.turns > 0).length;
+    if (active < STREAK_NEED) away++;
+  }
+  const xp = before(g, today, 14).map((d) => d.xp ?? 0).filter((n) => n > 0);
+  if (!away || !xp.length) return;
+  const avg = xp.reduce((n, x) => n + x, 0) / xp.length;
+  g.rested = Math.round(Math.min(RESTED_DAYS * avg, g.rested + away * avg));
 }
 
 // --- Gifts at trainer levels, the same for everyone. One with several `ids` waits for a choice.
@@ -565,12 +719,14 @@ export function unblocked(project, ms) {
   const g = game();
   if (ms <= FAST_MS) {
     bump(g, (c) => { c.fast += 1; });
+    tally(g, "fast");
     g.happy = { ...g.happy, [project]: true };
   } else if (options().hardMode && ms >= FAINT_MS && !g.fainted[project]) {
     g.fainted = { ...g.fainted, [project]: true };
     const id = (shared(PARTNERS) ?? {})[project];
     notify({ title: `${id ? nameOf(id) : "Your partner"} fainted!`, body: `${projectLabel(project)}'s agent waited ${Math.round(ms / 60000)} min. Its next task earns no XP.`, level: "warning", icon: id ? `mods/pokedex-agents/pokemon/${id}.png` : undefined });
   }
+  learn(g, "agent");
   put(g);
 }
 
@@ -587,14 +743,21 @@ function expire(g, now = Date.now()) {
   for (let i = g.wild.length - 1; i >= 0; i--) if (expired(g.wild[i], now)) leave(g, i, "fled");
 }
 
-// A finished agent turn: XP by its length, the streak, items, quests, maybe a wild Pokemon.
-export function finishTask(project, partnerId, ms, app = null) {
+// A finished agent turn: XP by its length, the streak, items, quests, maybe a wild Pokemon. `branch`:
+// the git branch it ran on, when the client knows it (for variety).
+export function finishTask(project, partnerId, ms, app = null, branch = null) {
   const g = game();
+  const today = day(new Date());
+  const firstToday = !(g.stats.days[today]?.turns > 0);
+  if (firstToday) rest(g, today);
   // Back after a while: one summary of what waits and what happened, before this turn's news.
   if (g.lastTurn && Date.now() - g.lastTurn >= AWAY_MS) digest(g);
   g.lastTurn = Date.now();
   g.tasks += 1;
   tally(g, "turns");
+  if (ms >= 10 * 60000) tally(g, "long");
+  learn(g, "agent");
+  learn(g, "task");
   tally(g, "ms", Math.max(0, ms));
   // This turn's results (a commit, green tests, a merge) may follow it.
   g.results = { ...g.results, [project]: [] };
@@ -629,20 +792,26 @@ export function finishTask(project, partnerId, ms, app = null) {
     notify({ title: `Found a ${ITEMS[stone].name}!`, body: "Use it from a partner's picker.", level: "success", quiet: true });
   }
 
-  const today = day(new Date());
-  if (g.streak.last !== today) {
-    const days = streakAlive(g.streak.last) ? g.streak.days + 1 : 1;
-    g.streak = { last: today, days, best: Math.max(g.streak.best, days) };
+  // A new active day: a Great Ball, maybe a Streak Freeze, and the streak walks up to today (an
+  // Ultra Ball for each full week it reaches).
+  if (firstToday) {
+    const active = g.streak.active + 1;
+    const freezes = active % FREEZE_EVERY === 0 ? Math.min(FREEZE_MAX, g.streak.freezes + 1) : g.streak.freezes;
+    const weeks = Math.floor(g.streak.days / 7);
+    g.streak = { ...g.streak, active, freezes };
+    walkStreak(g, today, true);
     gain(g, "great");
-    if (days % 7 === 0) gain(g, "ultra");
+    if (Math.floor(g.streak.days / 7) > weeks) gain(g, "ultra");
   }
 
   bump(g, (c) => {
     c.tasks += 1;
     c.projects = addOnce(c.projects, project);
     c.agents = addOnce(c.agents, app);
+    c.branches = addOnce(c.branches, branch ? `${project}\n${branch}` : null);
     if (ms >= 10 * 60000) c.long += 1;
   });
+  tally(g, "variety", variety(g.quests.d), true);
 
   // The tall grass: old Pokemon flee, the rest wear down with the work done while they wait, and a
   // new one may join while there's room. A new one is news, but never opens anything by itself:
@@ -664,6 +833,7 @@ export function finishTask(project, partnerId, ms, app = null) {
 export function finishSubTask(project, partnerId) {
   const g = game();
   g.subtasks += 1;
+  learn(g, "agent");
   save(g, g.fainted[project] ? false : award(g, Math.round(SUBTASK_XP * dailyRate(g))));
 }
 
@@ -678,18 +848,21 @@ export function throwBall(ball = "poke", index = 0) {
     put(g);
     return "gone";
   }
-  if (ball === "poke" ? e.balls < 1 : !(g.bag[ball] > 0)) return "empty";
-  const after = ball === "poke" ? { ...e, balls: e.balls - 1 } : e;
-  if (ball !== "poke") g.bag = { ...g.bag, [ball]: g.bag[ball] - 1 };
+  // A Poke Ball is one of the encounter's free ones while they last, then one from the bag.
+  const free = ball === "poke" && e.balls > 0;
+  if (!free && !(g.bag[ball] > 0)) return "empty";
+  const after = free ? { ...e, balls: e.balls - 1 } : e;
+  if (!free) g.bag = { ...g.bag, [ball]: g.bag[ball] - 1 };
   if (Math.random() < throwRate(e, ball)) {
     addCaught(g, [e.id], "wild", e.project ?? null);
     leave(g, index, "caught");
     bump(g, (c) => { c.catches += 1; });
+    learn(g, "catch");
     save(g);
     return "caught";
   }
   // It stays while any ball is left to throw.
-  if (after.balls > 0 || (g.bag.great ?? 0) > 0 || (g.bag.ultra ?? 0) > 0) {
+  if (after.balls > 0 || ["poke", "great", "ultra"].some((b) => (g.bag[b] ?? 0) > 0)) {
     g.wild = g.wild.map((w, i) => (i === index ? after : w));
     put(g);
     return "missed";
