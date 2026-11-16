@@ -237,6 +237,12 @@ function scan() {
   touch();
 }
 
+const SHELLS = new Set(["zsh", "bash", "fish", "sh", "dash", "ksh", "tcsh", "csh", "nu", "pwsh", "login"]);
+function agentInForeground(session, block) {
+  const name = blockCall(session, block, "process").value?.foreground?.name;
+  return Boolean(name) && !SHELLS.has(name);
+}
+
 const pending = new Set();
 function onEvent(ev) {
   if (ev.type === "session_created") {
@@ -293,6 +299,10 @@ function onEvent(ev) {
       if (p.name === "program_status_removed") {
         const b = blocks.get(block);
         if (!b) return;
+        // Rex drops a working record when it sees a shell prompt mark (OSC 133). Some agents' own
+        // screens send one mid-turn (OMO does), so while the agent is still the foreground program
+        // its turn goes on: the records are kept and the turn ends when it reports idle or done.
+        if (p.payload?.reason === "prompt" && agentInForeground(session, block)) return;
         for (const id of p.payload.ids ?? []) {
           b.records.delete(id);
           delete b.subPrev[id];

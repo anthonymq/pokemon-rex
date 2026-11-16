@@ -1,6 +1,6 @@
 {
   "name": "pokemon-rex",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A Pokedex for Rex: your coding agents as Pokemon partners that level up, evolve and meet wild Pokemon.",
   "type": "module",
   "private": true,
