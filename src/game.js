@@ -4,7 +4,9 @@
 // State lives in shared("pokedex.game"):
 // { xp: {project: n}, tasks, subtasks, evolutions, streak: {last, days, best}, badges: [ids], shiny: [ids],
 //   encounter: {id, at, balls, weak, project} | null, encounters: {seen, caught, fled}, recent: [{id, at}],
-//   bag: {item: n}, dex: {id: {at, project, how}}, fainted: {project: true}, quests: {day, week, d, w} }
+//   bag: {item: n}, dex: {id: {at, project, how}}, fainted: {project: true}, quests: {day, week, d, w},
+//   version, stats: {days: {day: {turns, ms, seen, caught, fled, quests}}, lengths: [ms]} }
+// `stats` is private: it stays in the local save and is never shared.
 // A project key is the space's git repo root (machine-qualified for remote spaces), else its name.
 import { shared, setShared, notify, playSound, settings } from "herdr";
 import { POKEMON as DEX } from "./pokemon.js";
@@ -94,6 +96,55 @@ export function game() {
     badges: g.badges ?? [], shiny: g.shiny ?? [], encounter: g.encounter ?? null,
     encounters: g.encounters ?? { seen: 0, caught: 0, fled: 0 }, recent: g.recent ?? [],
     bag: g.bag ?? {}, dex: g.dex ?? {}, fainted: g.fainted ?? {}, quests: g.quests ?? null,
+    // A save written before versioning is version 1; a brand-new one starts at the current version.
+    version: g.version ?? (Object.keys(g).length ? 1 : SAVE_VERSION), stats: g.stats ?? blankStats(),
+  };
+}
+
+// --- Save versions. Each step upgrades a save from version n to n + 1; the server runs them at start
+// and after an import or a merge. A save newer than these rules is left alone.
+//   1 -> 2: local stats.
+export const SAVE_VERSION = 2;
+const MIGRATIONS = {
+  1: (g) => ({ ...g, stats: g.stats ?? blankStats() }),
+};
+// Upgrades the save to SAVE_VERSION. Returns the version it now has.
+export function migrateSave() {
+  const raw = shared(GAME);
+  if (!raw) return SAVE_VERSION;
+  let g = raw, v = raw.version ?? 1;
+  if (v >= SAVE_VERSION) return v;
+  while (v < SAVE_VERSION) g = { ...MIGRATIONS[v](g), version: ++v };
+  setShared(GAME, g);
+  return v;
+}
+
+// --- Local stats, for pacing and (later) goals sized to the player's own median.
+const STATS_DAYS = 90; // days kept
+const STATS_LENGTHS = 200; // recent turn lengths kept for the median
+const blankStats = () => ({ days: {}, lengths: [] });
+const blankDay = () => ({ turns: 0, ms: 0, seen: 0, caught: 0, fled: 0, quests: 0 });
+// Adds n to today's `key`. Mutates g.
+function tally(g, key, n = 1) {
+  const s = g.stats ?? blankStats(), k = day(new Date());
+  const today = { ...blankDay(), ...s.days[k] };
+  today[key] += n;
+  g.stats = { ...s, days: { ...s.days, [k]: today } };
+}
+const median = (xs) => {
+  if (!xs.length) return 0;
+  const s = [...xs].sort((a, b) => a - b), m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+// The last `span` days (today included): active days, median turns per active day, median turn
+// length, encounters and quests completed.
+export function localStats(g = game(), now = new Date(), span = 14) {
+  const keys = new Set(Array.from({ length: span }, (_, i) => day(new Date(now.getFullYear(), now.getMonth(), now.getDate() - i))));
+  const days = Object.entries(g.stats.days).filter(([k, d]) => keys.has(k) && d.turns > 0).map(([, d]) => d);
+  const sum = (key) => days.reduce((n, d) => n + d[key], 0);
+  return {
+    span, activeDays: days.length, turnsPerDay: median(days.map((d) => d.turns)), medianTurnMs: median(g.stats.lengths),
+    turns: sum("turns"), seen: sum("seen"), caught: sum("caught"), fled: sum("fled"), quests: sum("quests"),
   };
 }
 
@@ -208,6 +259,7 @@ function bump(g, fn) {
   for (const [x, c, weekly] of [...daily.map((x) => [x, q.d, false]), [week1, q.w, true]]) {
     if (c.done.includes(x.id) || x.n(c) < x.need) continue;
     c.done = [...c.done, x.id];
+    tally(g, "quests");
     let reward = "2 Great Balls";
     if (weekly) {
       const stone = STONES[hash(q.week) % STONES.length];
@@ -307,6 +359,12 @@ export function unblocked(project, ms) {
 export function finishTask(project, partnerId, ms, app = null) {
   const g = game();
   g.tasks += 1;
+  tally(g, "turns");
+  tally(g, "ms", Math.max(0, ms));
+  g.stats = {
+    days: Object.fromEntries(Object.entries(g.stats.days).filter(([k]) => k >= day(new Date(Date.now() - STATS_DAYS * 86400000)))),
+    lengths: [...g.stats.lengths, Math.max(0, ms)].slice(-STATS_LENGTHS),
+  };
   let evolved = false;
   if (g.fainted[project]) {
     // A fainted partner spends this task recovering.
@@ -345,6 +403,7 @@ export function finishTask(project, partnerId, ms, app = null) {
   // An encounter nobody answered fled; without this it would block every later one.
   if (g.encounter && expired(g.encounter)) {
     g.encounters = { ...g.encounters, fled: g.encounters.fled + 1 };
+    tally(g, "fled");
     g.encounter = null;
   }
   // Work done while a Pokemon waits wears it down.
@@ -354,6 +413,7 @@ export function finishTask(project, partnerId, ms, app = null) {
     if (LEGENDARY.includes(wild)) wild = 1 + Math.floor(Math.random() * 151); // legendaries need a second roll
     g.encounter = { id: wild, at: Date.now(), balls: BALLS, weak: 0, project };
     g.encounters = { ...g.encounters, seen: g.encounters.seen + 1 };
+    tally(g, "seen");
     notify({ title: `A wild ${nameOf(wild)} appeared!`, body: "Click to throw a Poke Ball.", level: "info", timeout: ENCOUNTER_MS, icon: `mods/pokedex-agents/pokemon/${wild}.png`, action: { name: "mod.open", args: { name: "pokedex-encounter" } } });
   }
   save(g, evolved);
@@ -372,7 +432,10 @@ export function throwBall(ball = "poke") {
   const g = game();
   const e = g.encounter;
   if (!e || expired(e)) {
-    if (e) g.encounters = { ...g.encounters, fled: g.encounters.fled + 1 };
+    if (e) {
+      g.encounters = { ...g.encounters, fled: g.encounters.fled + 1 };
+      tally(g, "fled");
+    }
     g.encounter = null;
     setShared(GAME, g);
     return "gone";
@@ -384,6 +447,7 @@ export function throwBall(ball = "poke") {
     addCaught(g, [e.id], "wild", e.project ?? null);
     g.encounter = null;
     g.encounters = { ...g.encounters, caught: g.encounters.caught + 1 };
+    tally(g, "caught");
     bump(g, (c) => { c.catches += 1; });
     save(g);
     return "caught";
@@ -396,12 +460,16 @@ export function throwBall(ball = "poke") {
   }
   g.encounter = null;
   g.encounters = { ...g.encounters, fled: g.encounters.fled + 1 };
+  tally(g, "fled");
   setShared(GAME, g);
   return "fled";
 }
 
 export function runAway() {
   const g = game();
-  if (g.encounter) g.encounters = { ...g.encounters, fled: g.encounters.fled + 1 };
+  if (g.encounter) {
+    g.encounters = { ...g.encounters, fled: g.encounters.fled + 1 };
+    tally(g, "fled");
+  }
   setShared(GAME, { ...g, encounter: null });
 }
