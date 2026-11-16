@@ -1,5 +1,6 @@
 // What the dialogs share with the sidebar: the housing-red plate with the lens, a title in
-// the pixel font and the status lights, over the pink rule. Returns the first free row.
+// the pixel font and the status lights, over the pink rule, and a red column down each side so
+// the screen sits in a red frame (the footer closes it). Returns the first free row.
 import { C, art, len } from "../term.js";
 
 const plain = { crop: false };
@@ -20,6 +21,8 @@ export function plate(s, title, onClose) {
   s.pixel("close", W - 7, 0, "ESC x", "cream");
   if (onClose) s.hit(W - 8, 0, 7, 1, onClose);
   s.put(0, 2, "▁".repeat(W), { fg: C.pink });
+  s.fill(0, 3, 1, s.rows - 3, C.red, C.cream);
+  s.fill(W - 1, 3, 1, s.rows - 3, C.red, C.cream);
   return 3;
 }
 

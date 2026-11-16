@@ -1,6 +1,7 @@
 // KANTO DEX: the searchable collection. With --pick <project> it is the mascot picker:
 // only caught Pokemon, Enter makes one the project's mascot (drawn on its cards). Stones are
-// used from the party, on the trainer card.
+// used from the party, on the trainer card. The look matches pokemon-herdr's: a red frame, catches
+// lit on tonal tiles, Pokemon still missing shaded on the bare screen.
 import { POKEMON } from "../pokemon.js";
 import { game, projectLabel } from "../game.js";
 import { caught, partnerOf, sprite } from "../core.js";
@@ -24,14 +25,15 @@ export function runCollection(args) {
     const have = new Set(caught());
     const g = game();
     const items = list();
-    s.fill(0, 0, W, H, C.green, C.lcd);
+    s.fill(0, 0, W, H, C.red, C.cream);
     let y = plate(s, project ? "CHOOSE MASCOT" : "KANTO DEX", () => app.quit());
+    s.fill(1, y, W - 2, H - y - 1, C.green, C.lcd);
 
     // Progress, then search and the filter tabs.
     y++;
     const count = `CAUGHT ${have.size} / 151`;
     s.pixel("count", 2, y, count, "lcd");
-    s.bar(len(count) + 4, y, Math.max(4, W - len(count) - 6), have.size / 151, C.cyan, C.band);
+    s.bar(len(count) + 4, y, Math.max(4, W - len(count) - 6), have.size / 151, C.lcd, C.band);
     if (project) s.pixel("for", 2, y + 1, clip(`FOR ${projectLabel(project).toUpperCase()}`, W - 4), "amber");
     y += project ? 2 : 1;
     s.pixel("search", 2, y, "SEARCH", "soft");
@@ -72,15 +74,17 @@ export function runCollection(args) {
     items.slice(scroll * per, (scroll + rowsVisible) * per).forEach((p, i) => {
       const x = left + (i % per) * cw, cy = top + Math.floor(i / per) * ch;
       const got = have.has(p.id), on = p.id === sel, shiny = g.shiny.includes(p.id);
-      const bg = got ? (shiny ? C.gold : C.lcd) : C.band;
-      s.fill(x, cy, cw - 1, ch - 1, bg, C.ink);
-      s.pixel(`no:${p.id}`, x + 1, cy, `#${String(p.id).padStart(3, "0")}`, got ? "band" : "mute");
-      if (p.id === current) s.pixel(`cur:${p.id}`, x + 6, cy, "MASCOT", "flame");
-      else if (got) s.put(x + cw - 3, cy, shiny ? "✦" : "✓", { fg: shiny ? C.flame : C.green, bold: true });
+      const bg = got ? C.band : C.green;
+      s.fill(x, cy, cw - 1, ch - 1, bg, C.cream);
+      s.pixel(`no:${p.id}`, x + 1, cy, `#${String(p.id).padStart(3, "0")}`, got ? "soft" : "mute");
+      if (p.id === current) s.pixel(`cur:${p.id}`, x + 6, cy, "MASCOT", "amber");
+      else if (shiny && got) s.put(x + cw - 3, cy, "✦", { fg: C.gold, bold: true });
       s.image(`p:${p.id}`, sprite(p.id), x + 3, cy + 1, 6, 3);
+      // A Pokemon still missing: its sprite under a shade in the screen colour (text draws over pictures).
+      if (!got) for (let r = 1; r <= 3; r++) s.put(x + 3, cy + r, "▒".repeat(6), { fg: C.green });
       s.fill(x, cy + 4, cw - 1, 1, on ? C.cyan : bg, C.ink);
       const name = clip(p.name, cw - 2);
-      s.pixel(`n:${p.id}`, x + Math.max(0, Math.floor((cw - 1 - len(name)) / 2)), cy + 4, name, on || got ? "ink" : "soft");
+      s.pixel(`n:${p.id}`, x + Math.max(0, Math.floor((cw - 1 - len(name)) / 2)), cy + 4, name, on ? "ink" : got ? "cream" : "mute");
       s.hit(x, cy, cw - 1, ch - 1, () => {
         if (project && sel === p.id) return choose();
         sel = p.id;

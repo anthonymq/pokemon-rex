@@ -1,5 +1,6 @@
 // The tall grass: the wild Pokemon waiting for you (up to five, a day each), as a battle card
 // that floats over the window. Pick one, throw a ball or run; closing leaves them waiting.
+// The look matches pokemon-herdr's: the dark screen in a red frame, one primary action (the Poke Ball).
 import { game, nameOf, throwRate, ITEMS, ENCOUNTER_MS, WILD_MAX } from "../game.js";
 import { call } from "../client.js";
 import { sprite, wildNow } from "../core.js";
@@ -73,8 +74,8 @@ export function runEncounter() {
     }
     const e = wild.find((w) => same(w, pick)) ?? pick;
     const id = result?.id ?? e.id;
-    s.fill(0, 0, W, H, C.red, C.ink);
-    s.fill(1, 1, W - 2, H - 2, C.cream, C.ink);
+    s.fill(0, 0, W, H, C.red, C.cream);
+    s.fill(1, 1, W - 2, H - 2, C.green, C.cream);
     const top = H - 5; // rows above the tall grass strip
     const sw = Math.min(16, Math.max(8, Math.floor(W / 3) & ~1)), sh = sw / 2;
     const sy = Math.max(1, Math.floor((top - sh) / 2));
@@ -82,42 +83,43 @@ export function runEncounter() {
     const tx = sw + 6, tw = W - tx - 3;
 
     // The tall grass: one tile per waiting Pokemon, the chosen one underlined. Click to choose.
-    s.pixel("grass", 3, top, clip(`TALL GRASS ${wild.length}/${WILD_MAX}`, W - 6), "band");
+    s.pixel("grass", 3, top, clip(`TALL GRASS ${wild.length}/${WILD_MAX}`, W - 6), "soft");
     wild.forEach((w, i) => {
       const x = 3 + i * 5, on = same(w, pick);
-      s.fill(x, top + 1, 4, 2, on ? C.gold : C.lcd, C.ink);
+      s.fill(x, top + 1, 4, 2, on ? C.band : C.green, C.cream);
       s.image(`q:${w.id}:${w.at}`, sprite(w.id), x, top + 1, 4, 2);
-      if (on) s.put(x, top + 3, "▀".repeat(4), { fg: C.green });
+      if (on) s.put(x, top + 3, "▀".repeat(4), { fg: C.amber });
       s.hit(x, top + 1, 4, 2, () => { if (!result) select(i); });
     });
     const hx = 3 + WILD_MAX * 5;
     if (W - hx - 2 > 6) {
-      s.pixel("keys1", hx, top + 1, clip("← → CHOOSE", W - hx - 2), "band");
-      s.pixel("keys2", hx, top + 2, clip("Q CLOSE", W - hx - 2), "band");
+      s.pixel("keys1", hx, top + 1, clip("← → CHOOSE", W - hx - 2), "mute");
+      s.pixel("keys2", hx, top + 2, clip("Q CLOSE", W - hx - 2), "mute");
     }
 
     if (result) {
-      s.pixel("result", tx, sy + 1, clip(result.text.toUpperCase(), tw), "ink");
+      s.pixel("result", tx, sy + 1, clip(result.text.toUpperCase(), tw), "cream");
       return;
     }
-    s.pixel("wild", tx, 2, "WILD POKEMON", "band");
-    s.pixel("name", tx, 3, clip(nameOf(id).toUpperCase(), tw), "ink");
-    s.pixel("odds", tx, 5, clip(`CATCH ${Math.round(throwRate(e) * 100)}%${e.weak ? ` WEAK x${e.weak}` : ""}`, tw), "band");
+    s.pixel("wild", tx, 2, "WILD POKEMON", "soft");
+    s.pixel("name", tx, 3, clip(nameOf(id).toUpperCase(), tw), "cream");
+    s.pixel("odds", tx, 5, clip(`CATCH ${Math.round(throwRate(e) * 100)}%`, tw), "soft");
+    if (e.weak) s.pixel("weak", tx + len(`CATCH ${Math.round(throwRate(e) * 100)}%`) + 1, 5, clip(`WEAK x${e.weak}`, tw), "amber");
     let y = 6;
     BALLS.forEach(([ball, label], i) => {
       const n = ball === "poke" ? e.balls : g.bag[ball] ?? 0;
       if (ball !== "poke" && !n) return;
       const text = ` ${i + 1} ${label.toUpperCase()} x${n} ${ball === "poke" ? "" : `${Math.round(throwRate(e, ball) * 100)}% `}`;
-      s.fill(tx, y, Math.min(tw, len(text)), 1, n ? C.green : C.band, C.cream);
-      s.pixel(`ball:${ball}`, tx, y, clip(text, tw), "cream");
+      const primary = ball === "poke" && n > 0;
+      s.fill(tx, y, Math.min(tw, len(text)), 1, primary ? C.lcd : C.band, primary ? C.ink : C.cream);
+      s.pixel(`ball:${ball}`, tx, y, clip(text, tw), primary ? "ink" : n ? "cream" : "mute");
       s.hit(tx, y, Math.min(tw, len(text)), 1, () => toss(ball));
       y++;
     });
-    s.fill(tx, y, 7, 1, C.lcdDim, C.ink);
-    s.pixel("run", tx, y, " R RUN ", "ink");
-    s.hit(tx, y, 7, 1, () => run());
+    s.pixel("run", tx, y, " R RUN AWAY", "mute");
+    s.hit(tx, y, 11, 1, () => run());
     if (note) s.pixel("note", tx, y + 1, clip(note.toUpperCase(), tw), "flame");
-    s.pixel("left", tx, top - 1, clip(`LEAVES IN ${until(ENCOUNTER_MS - (now - e.at))}`, tw), "band");
+    s.pixel("left", tx, top - 1, clip(`LEAVES IN ${until(ENCOUNTER_MS - (now - e.at))}`, tw), "mute");
   }
   function onEvent(ev) {
     if (ev.key === "1" || ev.key === "enter" || ev.key === " ") toss("poke");
