@@ -1,9 +1,9 @@
 // KANTO DEX: the searchable collection. With --pick <project> it is the partner picker:
 // only caught Pokemon, Enter makes one the project's partner, and stones can be used.
-import { locked } from "herdr";
 import { POKEMON } from "../pokemon.js";
-import { game, projectLabel, nameOf, itemsFor, useItem, ITEMS, progress } from "../game.js";
-import { caught, partnerOf, setPartner, sprite } from "../core.js";
+import { game, projectLabel, nameOf, itemsFor, ITEMS, progress } from "../game.js";
+import { caught, partnerOf, sprite } from "../core.js";
+import { call } from "../client.js";
 import { C, runApp, clip, len } from "../term.js";
 import { plate } from "./chrome.js";
 
@@ -110,8 +110,7 @@ export function runCollection(args) {
   function choose() {
     if (!project) return;
     if (!caught().includes(sel)) return void (message = "Only caught Pokemon can be partners.");
-    setPartner(project, sel);
-    app.quit();
+    call("setPartner", project, sel).then(() => app.quit(), (error) => { message = error.message; });
   }
   function onEvent(ev) {
     message = "";
@@ -138,12 +137,12 @@ export function runCollection(args) {
       const use = itemsFor(partnerOf(project))[Number(ev.char) - 1];
       if (!use) return;
       if (!use.have) return void (message = `No ${ITEMS[use.item].name} in the bag.`);
-      const to = locked(() => useItem(project, use.item));
-      if (to) {
+      call("useItem", project, use.item).then((to) => {
+        if (!to) return;
         sel = to;
         const { level } = progress(game().xp[project]);
         message = `${projectLabel(project)}'s partner evolved into ${nameOf(to)} (Lv ${level})!`;
-      }
+      }, (error) => { message = error.message; });
       return;
     }
     if (ev.char) query += ev.char;

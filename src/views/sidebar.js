@@ -4,7 +4,8 @@
 // detail card for the selected agent, and the trainer strip.
 import fs from "node:fs";
 import path from "node:path";
-import { shared, setShared, locked, writeJson, ROOT } from "herdr";
+import { shared, writeJson, ROOT } from "herdr";
+import { call } from "../client.js";
 import { game, progress, trainerLevel, liveStreak, projectLabel, nameOf, BADGES, ENCOUNTER_MS } from "../game.js";
 import { agentsSnapshot, notes, sprite, badgeArt, caught, ensureDaemon, openDialog, daemonPid, NOTE_MS, GOTO_FILE } from "../core.js";
 import { api, rex, view, findWindow, fitColumns } from "../rex.js";
@@ -302,7 +303,7 @@ export function runSidebar() {
     }
   }
 
-  const toggleSort = () => locked(() => setShared("agents.sort", sort() === "grouped" ? "priority" : "grouped"));
+  const toggleSort = () => call("setSort", sort() === "grouped" ? "priority" : "grouped").catch((error) => say(error.message));
   function onEvent(ev) {
     if (ev.wheel) {
       if (ev.y >= listBox.top && ev.y < listBox.bottom) listScroll = Math.max(0, listScroll + ev.wheel);

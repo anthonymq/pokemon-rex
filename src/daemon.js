@@ -3,9 +3,10 @@
 // writes agents.json for the sidebars to draw.
 import fs from "node:fs";
 import path from "node:path";
-import { writeJson, readJson, locked, shared, setShared, settings, STATE_DIR } from "./herdr.js";
-import { game, levelOf, nameOf, finishTask, finishSubTask, recordCatches, unblocked, projectLabel, PARTNERS } from "./game.js";
-import { AGENTS_FILE, PID_FILE, daemonPid, partnerOf, caught, withSession } from "./core.js";
+import { writeJson, readJson, shared, settings, STATE_DIR } from "./herdr.js";
+import { game, levelOf, nameOf, projectLabel, PARTNERS } from "./game.js";
+import { AGENTS_FILE, PID_FILE, daemonPid, partnerOf, caught, showNote } from "./core.js";
+import { connect, sendFrom } from "./client.js";
 import { REX, TERMINAL, rex, api, ensureSidebar, fitSidebar, sidebarPrefs, blockCall, sessions as listSessions, view, windowBlocks, labelOf } from "./rex.js";
 
 const blocks = new Map(); // block id -> { session, records: Map<id, record>, cwd, project, since: {s, at}, subPrev }
@@ -64,13 +65,15 @@ function track(block, b) {
   const root = b.records.get("");
   const app = root?.effective_app ?? root?.app ?? [...b.records.values()].find((r) => r.effective_app)?.effective_app ?? null;
 
-  locked(() => withSession(b.session, () => {
+  // What happened goes to the Pokedex server, which plays the rules; its news comes back as toasts.
+  const send = (action, ...args) => sendFrom(b.session, action, ...args);
+  {
     // An agent's project gets its partner when the agent first shows up, and catches it.
     if (!seen.has(block)) {
       seen.add(block);
       const id = partnerOf(project);
-      if (shared(PARTNERS)?.[project] === undefined) setShared(PARTNERS, { ...(shared(PARTNERS) ?? {}), [project]: id });
-      if (!caught().includes(id)) recordCatches([id], project);
+      if (shared(PARTNERS)?.[project] === undefined) send("savePartners", { [project]: id });
+      if (!caught().includes(id)) send("met", [id], project);
     }
     const s = norm(agentState(b));
     const prev = b.since;
@@ -78,9 +81,9 @@ function track(block, b) {
       // Done and idle count as one. A working agent going quiet finished a task.
       if (prev?.s === "working" && s === "idle") {
         log(`task finished in ${projectLabel(project)} after ${Math.round((now - prev.at) / 1000)}s (${app ?? "?"})`);
-        finishTask(project, partnerOf(project), now - prev.at, app);
+        send("taskFinished", project, partnerOf(project), now - prev.at, app);
       }
-      if (prev?.s === "blocked") unblocked(project, now - prev.at);
+      if (prev?.s === "blocked") send("unblocked", project, now - prev.at);
       b.since = { s, at: now };
     }
     // Sub-agents: a child record going from working to idle or done earns the smaller award.
@@ -88,9 +91,9 @@ function track(block, b) {
       if (id === "") continue;
       const before = b.subPrev[id];
       b.subPrev[id] = r.state;
-      if (before === "working" && (r.state === "idle" || r.state === "done")) finishSubTask(project, partnerOf(project));
+      if (before === "working" && (r.state === "idle" || r.state === "done")) send("subTaskFinished", project, partnerOf(project));
     }
-  }));
+  }
 }
 
 let dirty = false;
@@ -317,6 +320,17 @@ export async function runDaemon() {
   process.on("SIGTERM", stop);
   process.on("SIGINT", stop);
   log(`pokedex daemon started (pid ${process.pid})`);
+  // The game comes from the Pokedex server (started if it isn't running). News that Rex caused
+  // is shown here, as a toast in the session it came from, once.
+  let shown = Date.now();
+  const onState = (state) => {
+    for (const n of state.notes ?? []) {
+      if (n.origin !== "rex" || n.at <= shown) continue;
+      shown = n.at;
+      try { showNote(n.session, n); } catch (error) { log(`toast failed: ${error}`); }
+    }
+  };
+  if (!(await connect({ onState }))) log("Pokedex server not reachable yet; still trying");
 
   // Follow the event stream for as long as the Rex server answers; reconnect when it restarts.
   for (;;) {

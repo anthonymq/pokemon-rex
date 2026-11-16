@@ -3,8 +3,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { shared, setShared, locked, sharedFile, STATE_DIR, readJson } from "../src/herdr.js";
-import { game, levelOf, trainerLevel, liveStreak, nameOf, projectLabel, recordCatches, CAUGHT, GAME, PARTNERS } from "../src/game.js";
+import { shared, STATE_DIR, readJson } from "../src/herdr.js";
+import { game, levelOf, trainerLevel, liveStreak, nameOf, projectLabel, CAUGHT, GAME, PARTNERS } from "../src/game.js";
+import { call, connect, loadState, serverDir } from "../src/client.js";
 import { agentsSnapshot, caught, daemonPid, ensureDaemon, openDialog, LOG_FILE } from "../src/core.js";
 import { toggleSidebar } from "../src/rex.js";
 
@@ -28,6 +29,25 @@ const dexId = (text) => {
     process.exit(1);
   }
   return n;
+};
+
+// The game is the Pokedex server's: views follow it live, one-shot commands read it once.
+const VIEWS = ["sidebar", "collection", "trainer", "encounter", "toast"];
+const READS = ["open", "status", "catch", "release", "import-herdr"];
+if (VIEWS.includes(cmd)) {
+  ensureDaemon();
+  await connect();
+} else if (READS.includes(cmd)) {
+  try { await loadState(); } catch (error) { need({ ok: false, error: error.message }); }
+}
+const ask = async (action, ...a) => {
+  try {
+    const value = await call(action, ...a);
+    await loadState();
+    return value;
+  } catch (error) {
+    need({ ok: false, error: error.message });
+  }
 };
 
 switch (cmd) {
@@ -65,6 +85,7 @@ switch (cmd) {
     const pid = daemonPid();
     console.log(`daemon    ${pid ? `running (pid ${pid})` : "not running"}`);
     console.log(`state     ${STATE_DIR}`);
+    console.log(`server    ${serverDir() ?? "not installed"}`);
     console.log(`trainer   Lv ${trainerLevel(g)} · caught ${caught().length}/151 · tasks ${g.tasks} + ${g.subtasks} sub · streak ${liveStreak(g)}d (best ${g.streak.best})`);
     console.log(`badges    ${g.badges.join(", ") || "none"}`);
     if (g.encounter) console.log(`wild      ${nameOf(g.encounter.id)} (${g.encounter.balls} balls left)`);
@@ -79,13 +100,13 @@ switch (cmd) {
   }
   case "catch": {
     const id = dexId(args[0]);
-    locked(() => recordCatches([id]));
+    await ask("catch", id);
     console.log(`caught ${nameOf(id)}: ${JSON.stringify(caught())}`);
     break;
   }
   case "release": {
     const id = dexId(args[0]);
-    locked(() => setShared(CAUGHT, caught().filter((n) => n !== id)));
+    await ask("release", id);
     console.log(`released ${nameOf(id)}: ${JSON.stringify(caught())}`);
     break;
   }
@@ -106,9 +127,8 @@ switch (cmd) {
     if (!keys.length) need({ ok: false, error: `${from} holds no Pokedex progress` });
     const mine = keys.filter((k) => shared(k) !== undefined);
     if (mine.length && !args.includes("--force")) need({ ok: false, error: `you already have progress here (${mine.join(", ")}); pass --force to replace it` });
-    if (mine.length) fs.copyFileSync(sharedFile, `${sharedFile}.bak-${Date.now()}`);
-    // A waiting encounter belongs to the other app's clock; leave it there.
-    locked(() => { for (const k of keys) setShared(k, k === GAME ? { ...theirs[k], encounter: null } : theirs[k]); });
+    // The server keeps a backup and leaves a waiting encounter to the other app's clock.
+    await ask("import", Object.fromEntries(keys.map((k) => [k, theirs[k]])));
     console.log(`imported ${keys.join(", ")} from ${from}`);
     break;
   }

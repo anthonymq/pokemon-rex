@@ -1,7 +1,7 @@
 // A wild Pokemon: the battle card that floats over the window. Throw a ball or run;
 // after 60 s it flees on its own.
-import { locked } from "herdr";
-import { game, nameOf, throwBall, runAway, throwRate, ITEMS, ENCOUNTER_MS } from "../game.js";
+import { game, nameOf, throwRate, ITEMS, ENCOUNTER_MS } from "../game.js";
+import { call } from "../client.js";
 import { sprite } from "../core.js";
 import { C, runApp, clip, len } from "../term.js";
 
@@ -20,16 +20,19 @@ export function runEncounter() {
     setTimeout(() => app.quit(), 2200);
   };
 
+  let busy = false; // one ball in the air at a time
   function toss(ball) {
-    if (result) return;
+    if (result || busy) return;
     const e = game().encounter;
     const id = e?.id ?? first.id;
-    const outcome = locked(() => throwBall(ball));
-    if (outcome === "caught") finish(`Gotcha! ${nameOf(id)} was caught!`, id);
-    else if (outcome === "fled") finish(`${nameOf(id)} fled!`, id);
-    else if (outcome === "gone") finish(`${nameOf(id)} is gone.`, id);
-    else if (outcome === "empty") note = `No ${ball === "poke" ? "Poke Balls" : ITEMS[ball].name + "s"} left.`;
-    else note = `${nameOf(id)} broke free!`;
+    busy = true;
+    call("throwBall", ball).then((outcome) => {
+      if (outcome === "caught") finish(`Gotcha! ${nameOf(id)} was caught!`, id);
+      else if (outcome === "fled") finish(`${nameOf(id)} fled!`, id);
+      else if (outcome === "gone") finish(`${nameOf(id)} is gone.`, id);
+      else if (outcome === "empty") note = `No ${ball === "poke" ? "Poke Balls" : ITEMS[ball].name + "s"} left.`;
+      else note = `${nameOf(id)} broke free!`;
+    }, (error) => { note = error.message; }).finally(() => { busy = false; });
   }
   let note = "";
 
@@ -40,8 +43,8 @@ export function runEncounter() {
     const now = Date.now();
     const id = result?.id ?? e?.id ?? first.id;
     // Someone else answered it (another window's card), or time ran out.
-    if (!result && (!e || now - e.at > ENCOUNTER_MS)) {
-      if (e) locked(() => throwBall("poke")); // counts it as fled
+    if (!result && !busy && (!e || now - e.at > ENCOUNTER_MS)) {
+      if (e) call("throwBall", "poke").catch(() => {}); // counts it as fled
       finish(`${nameOf(id)} fled!`, id);
     }
     const frame = !result && s.phase ? C.gold : C.red;
@@ -81,7 +84,7 @@ export function runEncounter() {
   function run() {
     if (result) return;
     const id = game().encounter?.id ?? first.id;
-    locked(() => runAway());
+    call("runAway").catch(() => {});
     finish(`Got away from ${nameOf(id)}.`, id);
   }
   function onEvent(ev) {

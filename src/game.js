@@ -157,6 +157,12 @@ function save(g, jingled = false) {
   setShared(GAME, g);
 }
 
+// Awards every badge the save already qualifies for, after progress came in from outside the rules
+// (a merge, an import, a restored backup).
+export function checkBadges() {
+  save(game());
+}
+
 // Quests: three daily ones and one weekly one, picked from the date so every screen agrees.
 const DAILY = [
   { id: "d-tasks", goal: "Finish 5 agent tasks", need: 5, n: (q) => q.tasks },

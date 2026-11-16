@@ -1,12 +1,11 @@
 // What every pokedex process shares besides the rules: partners, sprites, news, the daemon.
 import fs from "node:fs";
 import path from "node:path";
-import { ROOT, STATE_DIR, readJson, writeJson, setHandlers, settings, shared, setShared, locked } from "./herdr.js";
+import { ROOT, STATE_DIR, readJson, settings, shared, remoteState } from "./herdr.js";
 import { PARTNERS, CAUGHT, projectLabel } from "./game.js";
 import { BUN, CLI, LABELS, view, findWindow, windowBlocks, labelOf, openFloat, api } from "./rex.js";
 
 export const AGENTS_FILE = path.join(STATE_DIR, "agents.json");
-export const NOTES_FILE = path.join(STATE_DIR, "notes.json");
 export const PID_FILE = path.join(STATE_DIR, "daemon.pid");
 export const LOG_FILE = path.join(STATE_DIR, "daemon.log");
 export const GOTO_FILE = path.join(STATE_DIR, "goto.json");
@@ -30,32 +29,15 @@ export function partnerOf(key) {
   return Number.isInteger(saved) && saved >= 1 && saved <= 151 ? saved : defaultPartner(key);
 }
 export const hasPartner = (key) => shared(PARTNERS)?.[key] !== undefined;
-export const setPartner = (key, id) => locked(() => setShared(PARTNERS, { ...(shared(PARTNERS) ?? {}), [key]: id }));
 export const caught = () => shared(CAUGHT) ?? [];
 
 export const agentsSnapshot = () => readJson(AGENTS_FILE, { at: 0, agents: [], sessions: [] });
-export const notes = () => readJson(NOTES_FILE, []);
+// News from the server: every app's, kept a day. Rex shows as toasts only those Rex caused.
+export const notes = () => remoteState()?.notes ?? [];
 
-// --- News. The rules call notify(); a note is kept for the sidebar and shown as a floating
-// toast in the Rex session it belongs to. A wild encounter opens its battle card instead.
-let noteSession = null;
-export const withSession = (session, fn) => {
-  const before = noteSession;
-  noteSession = session ?? before;
-  try { return fn(); } finally { noteSession = before; }
-};
-const iconId = (icon) => Number(/(\d+)\.png$/.exec(icon ?? "")?.[1]) || null;
-
-function deliver(note) {
-  const entry = { at: Date.now(), title: note.title, body: note.body ?? "", level: note.level ?? "info", id: iconId(note.icon), encounter: !!note.action };
-  writeJson(NOTES_FILE, [...notes().filter((n) => Date.now() - n.at < 86400000), entry].slice(-30));
-  if (!settings().toasts.enabled) return;
-  const session = noteSession ?? process.env.REX_SESSION;
-  if (!session) return;
-  // Opening a pane takes a few calls; the rules shouldn't wait for them while holding the lock.
-  queueMicrotask(() => { try { showNote(session, entry); } catch (error) { console.error(`pokedex: toast failed: ${error}`); } });
-}
-function showNote(session, entry) {
+// A note as a floating toast in the Rex session it came from; a wild encounter opens its battle card.
+export function showNote(session, entry) {
+  if (!settings().toasts.enabled || !session) return;
   const v = view(session);
   const win = findWindow(v, {});
   if (!win) return;
@@ -64,14 +46,6 @@ function showNote(session, entry) {
   if (windowBlocks(win).some((b) => labelOf(win, b.block) === LABELS[name])) return;
   openFloat(session, win, name, { focus: false, place: entry.encounter ? "top" : "right" });
 }
-
-const SOUNDS = { "evolve.mp3": "evolve.mp3", "badge.mp3": "badge.mp3" };
-function sound(file) {
-  const name = SOUNDS[path.basename(file)];
-  if (!name || process.platform !== "darwin") return;
-  Bun.spawn(["afplay", path.join(ROOT, "assets", "sounds", name)], { stdout: "ignore", stderr: "ignore", stdin: "ignore" }).unref();
-}
-setHandlers({ notify: deliver, sound });
 
 // --- The daemon watches every Rex session and awards XP. Any pokedex command starts it.
 export function daemonPid() {

@@ -68,11 +68,14 @@ All 151, searchable by name or number. Every catch remembers how you got it (met
 
 ## Install
 
-You need [Bun](https://bun.sh) and Rex. Clone into your Rex config folder:
+You need [Bun](https://bun.sh), Rex and the [Pokedex agents server](https://github.com/anthonymq/pokedex-agents-server), which holds the game and your progress. Clone both:
 
 ```sh
+git clone https://github.com/anthonymq/pokedex-agents-server.git ~/.local/share/pokedex-agents-server
 git clone https://github.com/anthonymq/pokemon-rex.git ~/.config/rex/pokedex
 ```
+
+The Pokedex starts the server when it isn't running. Put the server somewhere else with `$POKEDEX_SERVER_DIR` or `server.dir` in the config.
 
 Add one line to `~/.config/rex/init.lua`:
 
@@ -82,13 +85,7 @@ require("pokedex")
 
 Then `rex config reload`, and press `ctrl+a o`.
 
-Coming from [pokemon-herdr](https://github.com/anthonymq/pokemon-herdr)? Bring your progress with you:
-
-```sh
-bun ~/.config/rex/pokedex/bin/pokedex.js import-herdr
-```
-
-It copies your game, catches and partners from `~/.config/herdr-app/data/shared.json`, and refuses to replace existing progress without `--force`. A project whose repo path is the same in both keeps its partner and level.
+Also playing in [pokemon-herdr](https://github.com/anthonymq/pokemon-herdr)? It uses the same server, so both apps share one save, and a project whose repo path is the same in both keeps its partner and level. To replace your progress with a copy of an old Herdr `shared.json` instead, run `bun ~/.config/rex/pokedex/bin/pokedex.js import-herdr [file] --force`. The server keeps a backup.
 
 ---
 
@@ -143,7 +140,6 @@ Optional, in `~/.local/state/rex-pokedex/config.json`:
 {
   "sidebar": { "auto": true, "side": "left", "columns": 30 },
   "labels": { "enabled": true },
-  "sounds": { "enabled": false },
   "toasts": { "enabled": false }
 }
 ```
@@ -155,8 +151,9 @@ Optional, in `~/.local/state/rex-pokedex/config.json`:
 | `sidebar.width` | Width as a share of the tab (default 0.25), used when `columns` is absent. |
 | `sidebar.auto` | Keep the sidebar open in every session's current tab, so it is there wherever you switch. |
 | `labels.enabled` | Name agent tabs after their partner. |
-| `sounds.enabled` | The evolution and badge jingles (on by default). |
 | `toasts.enabled` | The floating news pane (on by default). |
+
+The evolution and badge jingles are the server's: turn them off with `"sounds": { "enabled": false }` in `~/.local/state/pokedex-agents-server/config.json`.
 
 Rex only knows a pane's real size while it is on screen, so with `columns` the sidebar measures itself when shown and moves its own border; a sidebar opened in a background tab settles to the exact width when you first look at it.
 
@@ -182,9 +179,9 @@ pokedex stop | log             # the daemon
 
 Rex has no native mods or layouts, so this is a terminal app: a sidebar pane and floating dialogs, drawn with true color and the real sprites through kitty graphics, which Rex's terminal supports. The pixel-font headings are pictures too.
 
-- **A daemon** (`pokedex daemon`) follows `rex events --all` for every session. When an agent goes from working to idle or done, it awards the task. It starts with the Rex server and any pokedex command restarts it if it is gone. XP only counts while it runs.
-- **The rules** are pokemon-herdr's `src/game.js`, unchanged, with its tests.
-- **State** lives in `~/.local/state/rex-pokedex/` (`$XDG_STATE_HOME`, or `$POKEDEX_STATE`): `shared.json` holds your progress under the same keys Herdr uses, `agents.json` is the daemon's live list.
+- **The game** is the [Pokedex agents server](https://github.com/anthonymq/pokedex-agents-server)'s. It plays the rules and keeps your progress. Every pokedex process follows it live and sends it what happens, so Rex and Herdr play one save.
+- **A daemon** (`pokedex daemon`) follows `rex events --all` for every session. When an agent goes from working to idle or done, it reports the finished task to the server, and it shows the news Rex caused as toasts. It starts with the Rex server, and any pokedex command restarts it if it is gone. XP only counts while it runs.
+- **Rex's own state** lives in `~/.local/state/rex-pokedex/` (`$XDG_STATE_HOME`, or `$POKEDEX_STATE`): the settings, the daemon's pid and log, and `agents.json`, the daemon's live list of agents.
 
 ### Differences from pokemon-herdr
 
@@ -197,7 +194,7 @@ Rex has no native mods or layouts, so this is a terminal app: a sidebar pane and
 
 ## Develop
 
-`bun test` runs pokemon-herdr's rule tests against `src/game.js`. `src/herdr.js` stands in for Herdr's `herdr` module (`tsconfig.json` maps the import), so `game.js` can be replaced by a newer copy from pokemon-herdr as is.
+The rules and their tests live in pokedex-agents-server. `src/game.js` and `src/pokemon.js` are copies of its files, kept for read-only helpers (levels, names, odds). `scripts/sync-game.sh` refreshes them, and `--check` reports a copy that differs. `src/herdr.js` stands in for Herdr's `herdr` module (`tsconfig.json` maps the import), and it refuses any change to the game: changes go through `src/client.js`.
 
 To look at a view without a terminal, dump one frame and turn it into a PNG (needs Pillow):
 
