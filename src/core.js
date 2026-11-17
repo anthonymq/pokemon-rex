@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ROOT, STATE_DIR, readJson, settings, shared, remoteState } from "./herdr.js";
-import { PARTNERS, CAUGHT, ENCOUNTER_MS, RULES_VERSION, projectLabel, savedKey, quests, liveStreak, shouldAlert, defaultPartner as basePartner } from "./game.js";
+import { PARTNERS, CAUGHT, ENCOUNTER_MS, RULES_VERSION, projectLabel, savedKey, quests, liveStreak, liveWeek, shouldAlert, defaultPartner as basePartner } from "./game.js";
 import { BUN, CLI, LABELS, view, findWindow, windowBlocks, labelOf, openFloat, api } from "./rex.js";
 
 export const AGENTS_FILE = path.join(STATE_DIR, "agents.json");
@@ -33,11 +33,13 @@ export function partnerOf(key) {
 }
 export const hasPartner = (key) => shared(PARTNERS)?.[savedKey(key)] !== undefined;
 
-// What the server computed from its clock (today's quests, the live streak): drawn as sent, so an
+// What the server computed from its clock (today's quests, the live streak, the week): drawn as sent, so an
 // older or newer copy of the rules here never shows different ones. An older server sends none.
 export const serverView = () => remoteState()?.view ?? null;
 export const questsNow = (g) => serverView()?.quests ?? quests(g);
 export const streakNow = (g) => serverView()?.streak ?? liveStreak(g);
+// The active days among the last 7: shown out of STREAK_NEED while the streak is 0.
+export const weekNow = (g) => serverView()?.week ?? liveWeek(g);
 // The server's rules version when it differs from this copy's (time to run scripts/sync-game.sh).
 export const rulesMismatch = () => { const v = serverView(); return v && v.rules !== RULES_VERSION ? v.rules : null; };
 export const caught = () => shared(CAUGHT) ?? [];

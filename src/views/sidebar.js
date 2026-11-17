@@ -6,9 +6,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { shared, writeJson, remoteState, ROOT } from "herdr";
 import { call } from "../client.js";
-import { game, partyOf, progress, trainerLevel, projectLabel, savedKey, nameOf, BADGES, WILD_MAX } from "../game.js";
+import { game, partyOf, progress, trainerLevel, projectLabel, savedKey, nameOf, BADGES, WILD_MAX, STREAK_NEED } from "../game.js";
 import { needsExplainer } from "./party.js";
-import { agentsSnapshot, notes, sprite, badgeArt, caught, ensureDaemon, openDialog, daemonPid, wildNow, streakNow, rulesMismatch, NOTE_MS, GOTO_FILE } from "../core.js";
+import { agentsSnapshot, notes, sprite, badgeArt, caught, ensureDaemon, openDialog, daemonPid, wildNow, streakNow, weekNow, rulesMismatch, NOTE_MS, GOTO_FILE } from "../core.js";
 import { api, rex, view, findWindow, fitColumns } from "../rex.js";
 import { C, runApp, clip, len, ago } from "../term.js";
 
@@ -292,10 +292,12 @@ export function runSidebar() {
     const tr = `TR${trainerLevel(g)}`;
     s.pixel("tr", 2, fy, clip(tr, chipW - 2), "ink");
     const streak = streakNow(g);
+    // Until a streak starts, the week's active days toward one.
+    const flame = streak ? `▲${streak}` : `▲${weekNow(g)}/${STREAK_NEED}`;
     let x = 3 + len(tr);
-    if (x + 4 < chipW) {
-      s.put(x, fy, `▲${streak}`, { fg: streak ? C.flame : C.band, bold: !!streak });
-      x += len(`▲${streak}`) + 1;
+    if (x + len(flame) + 1 < chipW) {
+      s.put(x, fy, flame, { fg: streak ? C.flame : C.band, bold: !!streak });
+      x += len(flame) + 1;
     }
     for (const b of BADGES.filter((b) => !b.rank)) {
       if (x + 1 >= chipW) break;

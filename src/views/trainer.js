@@ -4,8 +4,8 @@
 // The look matches pokemon-herdr's card: a red frame around one dark screen, sections on tonal bands
 // instead of light slabs, amber for what's best (the lead, Gold quests, shinies).
 import { remoteState } from "herdr";
-import { game, partyOf, progress, nameOf, options, BADGES, ITEMS, GIFTS, DAYCARE, TUTORIAL, TIERS } from "../game.js";
-import { caught, sprite, badgeArt, questsNow, streakNow } from "../core.js";
+import { game, partyOf, progress, nameOf, options, BADGES, ITEMS, GIFTS, DAYCARE, TUTORIAL, TIERS, STREAK_NEED } from "../game.js";
+import { caught, sprite, badgeArt, questsNow, streakNow, weekNow } from "../core.js";
 import { call, shareOnX } from "../client.js";
 import { C, runApp, clip, len } from "../term.js";
 import { plate } from "./chrome.js";
@@ -48,11 +48,14 @@ export function runTrainer() {
     const barW = Math.min(26, Math.max(10, Math.floor(IW / 3) - 2));
     s.bar(lx, y + 1, barW, into, C.lcd, C.green);
     s.put(lx, y + 2, clip(`${g.lifetime} / ${next} XP`, barW), { fg: C.soft });
-    const freezes = g.streak.freezes ?? 0;
+    const freezes = g.streak.freezes ?? 0, streak = streakNow(g);
+    const frozen = freezes ? `${freezes} freeze${freezes > 1 ? "s" : ""}` : "";
     const facts = [
       ["CAUGHT", `${have.length}/151`, g.shiny.length ? `${g.shiny.length} shiny` : ""],
       ["TASKS", String(g.tasks), g.subtasks ? `+${g.subtasks} sub` : ""],
-      ["STREAK", `${streakNow(g)}d`, `best ${g.streak.best}d`, freezes ? `${freezes} freeze${freezes > 1 ? "s" : ""}` : ""],
+      // Until a streak starts, the week's active days toward one.
+      streak ? ["STREAK", `${streak} day${streak > 1 ? "s" : ""}`, `best ${g.streak.best}`, frozen]
+        : ["STREAK", `${weekNow(g)}/${STREAK_NEED}`, `days this week · best ${g.streak.best}`, frozen],
       ["WILD", `${g.encounters.caught}/${g.encounters.seen}`, g.encounters.fled ? `${g.encounters.fled} fled` : ""],
     ];
     // A fact's `extra` (the streak's freezes) sits on the value row, after the value.

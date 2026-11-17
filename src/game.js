@@ -138,7 +138,7 @@ export function game() {
 export const SAVE_VERSION = 5;
 // The rules' version: bump it with any change to what the rules compute, so an app whose copy of
 // this file is older or newer than the server's can say so (the server sends it with the state).
-export const RULES_VERSION = 1;
+export const RULES_VERSION = 2;
 const MIGRATIONS = {
   1: (g) => ({ ...g, stats: g.stats ?? blankStats() }),
   2: (g) => ({ ...g, wild: g.wild ?? (g.encounter ? [g.encounter] : []), fainted: {}, happy: g.happy ?? {} }),
@@ -305,6 +305,12 @@ export function liveStreak(g, now = new Date()) {
   if (!g.streak.last) return 0;
   if (g.streak.last >= k) return g.streak.days;
   return walkStreak(g, addDays(k, -1), false).days;
+}
+// The week's progress toward a streak: the active (or frozen) days among the 7 ending today, out of
+// the STREAK_NEED a day needs. What the apps show while the streak is 0.
+export function liveWeek(g, now = new Date()) {
+  const k = day(now);
+  return Array.from({ length: STREAK_WINDOW }, (_, i) => g.stats?.days?.[addDays(k, -i)]).filter((d) => d?.turns > 0 || d?.frozen).length;
 }
 
 const day = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
