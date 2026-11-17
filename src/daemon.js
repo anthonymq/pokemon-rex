@@ -82,8 +82,12 @@ function refreshCwd(b, block, foreground) {
   const cwd = foreground?.cwd ?? blockCall(b.session, block, "process").value?.foreground?.cwd ?? null;
   if (cwd && cwd !== b.cwd) {
     b.cwd = cwd;
-    // An agent keeps the project it started in: `cd` inside a turn shouldn't move its XP.
-    b.project ??= projectFor(cwd, b.session);
+    // An agent keeps its project through a turn: `cd` inside one shouldn't move its XP. Between turns the
+    // pane follows its folder, so a new agent started elsewhere doesn't keep (and share) the old mascot.
+    if (b.project && b.turn) return;
+    const project = projectFor(cwd, b.session);
+    if (project !== b.project) seen.delete(block);
+    b.project = project;
   }
 }
 
