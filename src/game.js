@@ -520,12 +520,16 @@ export const partyOf = (g = game()) => g.party.map((id) => ({ id, xp: g.pokemon[
 export const lead = (g = game()) => g.party[0] ?? null;
 
 // A party member changes form, keeping its XP: it joins the Pokedex, counts for badges and quests,
-// and plays the jingle. Mutates g.
+// and plays the jingle. Projects showing it as their mascot show the new form. Mutates g.
 function evolve(g, from, to, detail) {
   g.evolutions += 1;
   const { [from]: xp, ...rest } = g.pokemon;
   g.pokemon = { ...rest, [to]: Math.max(xp ?? 0, rest[to] ?? 0) };
   g.party = [...new Set(g.party.map((id) => (id === from ? to : id)))];
+  const partners = shared(PARTNERS) ?? {};
+  if (Object.values(partners).includes(from)) {
+    setShared(PARTNERS, Object.fromEntries(Object.entries(partners).map(([k, id]) => [k, id === from ? to : id])));
+  }
   addCaught(g, [to], "evolved", null);
   bump(g, (c) => { c.evolutions += 1; });
   jingle("evolve");
