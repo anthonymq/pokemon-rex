@@ -5,9 +5,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ROOT, STATE_DIR, settings, setRemote } from "./herdr.js";
+import { ROOT, STATE_DIR, settings, setRemote, readJson } from "./herdr.js";
 
-const port = () => Number(process.env.POKEDEX_PORT) || settings().server?.port || 7151;
+// The server's port: POKEDEX_PORT, `server.port` in Rex's config.json, else `port` in the server's own
+// config.json (where the server reads it), else 7151.
+const SERVER_CONFIG = path.join(process.env.XDG_STATE_HOME ?? path.join(os.homedir(), ".local", "state"), "pokedex-agents-server", "config.json");
+const port = () => Number(process.env.POKEDEX_PORT) || settings().server?.port || Number(readJson(SERVER_CONFIG, {})?.port) || 7151;
 const base = () => `http://127.0.0.1:${port()}`;
 
 // Where the server is installed: POKEDEX_SERVER_DIR, `server.dir` in config.json, or a usual place.
@@ -30,8 +33,33 @@ export function startServer() {
   return true;
 }
 
+// Opens a URL in the browser: open on macOS, start on Windows, else xdg-open (WSL: wslview, else
+// Windows' own opener).
+function openUrl(url) {
+  const cmd = process.platform === "darwin" ? ["open", url]
+    : process.platform === "win32" ? ["cmd", "/c", "start", "", url]
+    : ["sh", "-c", 'xdg-open "$1" || wslview "$1" || explorer.exe "$1"', "sh", url];
+  Bun.spawn(cmd, { stdout: "ignore", stderr: "ignore" }).unref();
+}
+// What to tell the person after shareOnX().
+export const shareMessage = ({ copied, card }) => (copied
+  ? `Card copied: paste it into the post (${process.platform === "darwin" ? "⌘V" : "Ctrl+V"})`
+  : `X opened; attach the card from ${card}`);
+
+// A jingle the server couldn't play itself (no afplay off macOS) comes with its note as `sound`:
+// played here from the server's assets with the first player installed.
+const SOUNDS = new Set(["evolve.mp3", "badge.mp3"]);
+export function playNoteSound(note) {
+  const dir = serverDir();
+  if (!SOUNDS.has(note.sound) || !dir) return;
+  const file = path.join(dir, "assets", "sounds", note.sound);
+  const player = [["mpv", "--no-video", "--really-quiet"], ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet"], ["mpg123", "-q"], ["play", "-q"]]
+    .find(([bin]) => Bun.which(bin));
+  if (player) Bun.spawn([...player, file], { stdout: "ignore", stderr: "ignore", stdin: "ignore" }).unref();
+}
+
 // Shares progress on X: the server puts the card image on the clipboard, and X's compose
-// window opens with the post's text. Resolves with whether the card was copied.
+// window opens with the post's text. Resolves with { copied, card } (card: the image's path).
 export async function shareOnX() {
   const r = await (await fetch(`${base()}/share`, {
     method: "POST",
@@ -39,8 +67,8 @@ export async function shareOnX() {
     body: JSON.stringify({ sprites: path.join(ROOT, "assets", "pokemon") }),
   })).json();
   if (!r.ok) throw new Error(r.error);
-  Bun.spawn(["open", r.url], { stdout: "ignore", stderr: "ignore" }).unref();
-  return r.copied;
+  openUrl(r.url);
+  return { copied: r.copied, card: r.card };
 }
 
 async function post(session, action, args, at) {
@@ -130,8 +158,8 @@ export const sendFrom = (session, action, ...args) =>
   (EVENTS.has(action) ? report(session, action, args) : callFrom(session, action, ...args))
     .catch((error) => console.error(`pokedex: ${action} failed: ${error.message}`));
 
-// Follows /events for as long as the process lives, reconnecting (and starting the server) when
-// it goes away. `onState` sees each state. Resolves true once the first state is in, false if
+// Follows /events for as long as the process lives, reconnecting when it goes away. The server is
+// started only when it can't be reached, once until a state comes through again. `onState` sees each state. Resolves true once the first state is in, false if
 // none came within `wait` ms.
 export function connect({ wait = 4000, onState } = {}) {
   return new Promise((resolve) => {
@@ -139,10 +167,17 @@ export function connect({ wait = 4000, onState } = {}) {
     const done = (v) => { if (!settled) { settled = true; resolve(v); } };
     setTimeout(() => done(false), wait);
     (async () => {
-      for (let fails = 0; ; ) {
+      for (let fails = 0, started = false; ; ) {
+        let res;
         try {
-          const res = await fetch(`${base()}/events`);
-          fails = 0;
+          res = await fetch(`${base()}/events`);
+        } catch {
+          fails++;
+          if (!started) { started = true; startServer(); }
+          await Bun.sleep(Math.min(5000, 500 * (fails + 1)));
+          continue;
+        }
+        try {
           const decoder = new TextDecoder();
           let buf = "";
           for await (const chunk of res.body) {
@@ -154,13 +189,15 @@ export function connect({ wait = 4000, onState } = {}) {
               const data = block.split("\n").filter((l) => l.startsWith("data: ")).map((l) => l.slice(6)).join("\n");
               if (!data) continue;
               const state = JSON.parse(data);
+              fails = 0;
+              started = false;
               setRemote(state);
               try { onState?.(state); } catch (error) { console.error(`pokedex: ${error}`); }
               done(true);
             }
           }
         } catch {
-          if (fails++ === 0) startServer();
+          fails++; // connected, then dropped or sent a bad state: back off, never start another server
         }
         await Bun.sleep(Math.min(5000, 500 * (fails + 1)));
       }

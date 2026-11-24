@@ -176,7 +176,7 @@ Optional, in `~/.local/state/rex-pokedex/config.json`:
 
 Game options are the server's, shared with pokemon-herdr, and shown by `pokedex status` and on the trainer card: `pokedex set alert off|on|smart` and `pokedex set hard-mode on|off`.
 
-The evolution and badge jingles are the server's: turn them off with `"sounds": { "enabled": false }` in `~/.local/state/pokedex-agents-server/config.json`.
+The evolution and badge jingles are the server's: turn them off with `"sounds": { "enabled": false }` in `~/.local/state/pokedex-agents-server/config.json`. Off macOS the server hands them to Rex, which plays them with the first of `mpv`, `ffplay`, `mpg123` or `play` (sox) it finds.
 
 Rex only knows a pane's real size while it is on screen, so with `columns` the sidebar measures itself when shown and moves its own border; a sidebar opened in a background tab settles to the exact width when you first look at it.
 

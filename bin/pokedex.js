@@ -5,7 +5,7 @@ import path from "node:path";
 import os from "node:os";
 import { shared, STATE_DIR, readJson } from "../src/herdr.js";
 import { game, partyOf, trainerLevel, nameOf, projectLabel, options, CAUGHT, GAME, GIFTS, PARTNERS, WILD_MAX, RULES_VERSION, STREAK_NEED } from "../src/game.js";
-import { call, connect, loadState, serverDir, shareOnX, OUTBOX } from "../src/client.js";
+import { call, connect, loadState, serverDir, shareOnX, shareMessage, OUTBOX } from "../src/client.js";
 import { agentsSnapshot, caught, daemonPid, ensureDaemon, openDialog, wildNow, streakNow, weekNow, rulesMismatch, LOG_FILE } from "../src/core.js";
 import { toggleSidebar } from "../src/rex.js";
 
@@ -142,8 +142,7 @@ switch (cmd) {
   }
   case "share": {
     try {
-      const copied = await shareOnX();
-      console.log(copied ? "X compose opened; the card is on the clipboard, paste it into the post" : "X compose opened; the card couldn't be copied");
+      console.log(shareMessage(await shareOnX()));
     } catch (error) {
       need({ ok: false, error: error.message });
     }
@@ -153,7 +152,7 @@ switch (cmd) {
 
   // Brings progress over from pokemon-herdr: the same keys, read from Herdr's shared.json.
   case "import-herdr": {
-    const from = args.find((a) => !a.startsWith("--")) ?? path.join(os.homedir(), ".config", "herdr-app", "data", "shared.json");
+    const from = args.find((a) => !a.startsWith("--")) ?? path.join(os.homedir(), ".config", "herdr-app", "shared.json");
     const theirs = readJson(from, null);
     if (!theirs) need({ ok: false, error: `can't read ${from}` });
     const keys = [GAME, CAUGHT, PARTNERS].filter((k) => theirs[k] !== undefined);

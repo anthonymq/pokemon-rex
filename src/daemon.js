@@ -6,7 +6,7 @@ import path from "node:path";
 import { writeJson, readJson, shared, settings, STATE_DIR } from "./herdr.js";
 import { nameOf, projectLabel, PARTNERS } from "./game.js";
 import { AGENTS_FILE, PID_FILE, daemonPid, partnerOf, hasPartner, showNote } from "./core.js";
-import { connect, sendFrom, flushOutbox } from "./client.js";
+import { connect, sendFrom, flushOutbox, playNoteSound } from "./client.js";
 import { REX, TERMINAL, rex, api, ensureSidebar, fitSidebar, sidebarPrefs, blockCall, sessions as listSessions, view, windowBlocks, labelOf } from "./rex.js";
 
 const blocks = new Map(); // block id -> { session, records: Map<id, record>, cwd, project, since: {s, at}, subPrev, turn: {at, head} }
@@ -382,6 +382,7 @@ export async function runDaemon() {
     for (const n of state.notes ?? []) {
       if (n.origin !== "rex" || n.at <= shown) continue;
       shown = n.at;
+      try { playNoteSound(n); } catch (error) { log(`jingle failed: ${error}`); }
       // Agents working right now, live (agents.json lags a moment): the "smart" alert waits on them.
       const busy = [...blocks.values()].filter((b) => b.records.size && norm(agentState(b)) === "working").length;
       try { showNote(n.session, n, busy); } catch (error) { log(`toast failed: ${error}`); }

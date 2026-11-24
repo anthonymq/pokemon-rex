@@ -6,7 +6,7 @@
 import { remoteState } from "herdr";
 import { game, partyOf, progress, nameOf, options, BADGES, ITEMS, GIFTS, DAYCARE, TUTORIAL, TIERS, STREAK_NEED } from "../game.js";
 import { caught, sprite, badgeArt, questsNow, streakNow, weekNow } from "../core.js";
-import { call, shareOnX } from "../client.js";
+import { call, shareOnX, shareMessage } from "../client.js";
 import { C, runApp, clip, len } from "../term.js";
 import { plate } from "./chrome.js";
 import { makeScreen, firstScreen, trainerProgress } from "./party.js";
@@ -194,7 +194,7 @@ export function runTrainer() {
   function share() {
     message = "Opening X...";
     shareOnX().then(
-      (copied) => { message = copied ? "Card copied: paste it into the post (⌘V)" : "X opened; the card couldn't be copied"; },
+      (r) => { message = shareMessage(r); },
       (error) => { message = `Share failed: ${error.message}`; },
     );
   }

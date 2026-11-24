@@ -5,7 +5,7 @@
 import { POKEMON } from "../pokemon.js";
 import { game, projectLabel } from "../game.js";
 import { caught, partnerOf, sprite } from "../core.js";
-import { call, shareOnX } from "../client.js";
+import { call, shareOnX, shareMessage } from "../client.js";
 import { C, runApp, clip, len } from "../term.js";
 import { plate } from "./chrome.js";
 
@@ -137,7 +137,7 @@ export function runCollection(args) {
       case "ctrl+s":
         message = "Opening X...";
         return void shareOnX().then(
-          (copied) => { message = copied ? "Card copied: paste it into the post (⌘V)" : "X opened; the card couldn't be copied"; },
+          (r) => { message = shareMessage(r); },
           (error) => { message = `Share failed: ${error.message}`; },
         );
       case "enter": return choose();
