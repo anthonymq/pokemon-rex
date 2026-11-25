@@ -14,6 +14,10 @@ const sessionLabels = new Map();
 const blockInfo = new Map(); // block id -> { window, label }
 const projects = new Map(); // cwd -> project key
 const seen = new Set(); // blocks whose project already got its mascot this start
+const focusOf = new Map(); // session -> the focused block of its active tab
+// Finished agents shown DONE until their pane gets focus (holdDone), kept across daemon restarts.
+const HELD_FILE = path.join(STATE_DIR, "held.json");
+const held = new Map(Object.entries(readJson(HELD_FILE, {}))); // block id -> { away }
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 
 // A project is the git repo an agent works in, else its folder, else its session.
@@ -123,6 +127,7 @@ function track(block, b) {
       if (s === "working" && !b.turn) b.turn = { at: now, head: headOf(b.cwd), branch: branchOf(b.cwd) };
       // Done and idle count as one. A working agent going quiet finished a task.
       if (prev?.s === "working" && s === "idle") {
+        held.set(block, { away: focusOf.get(b.session) !== block });
         log(`task finished in ${projectLabel(project)} after ${Math.round((now - prev.at) / 1000)}s (${app ?? "?"})`);
         const partner = partnerOf(project), ms = now - prev.at;
         const finished = Promise.resolve(b.turn?.branch ?? null).then((branch) => send("taskFinished", project, partner, ms, app, branch));
@@ -142,19 +147,43 @@ function track(block, b) {
   }
 }
 
+// A finish stays DONE until its pane gets focus, even when the agent reports idle right after.
+// `away` says the pane lost focus after the finish, so a finish watched in its own pane stays
+// DONE until you leave and come back. Working, blocked or an error again ends the hold. Rex
+// doesn't say which session the app shows, so focus is each session's focused block in its
+// active tab. Once focused, a done record the agent leaves behind shows as idle (`seen`).
+function holdDone(block, b) {
+  const raw = agentState(b), focused = focusOf.get(b.session) === block;
+  let h = held.get(block);
+  if (raw !== "idle" && raw !== "done") h = undefined;
+  else if (h?.seen) {
+    if (raw !== "done") h = undefined;
+  } else {
+    if (!h && raw === "done") h = { away: !focused };
+    if (h && !focused) h = { away: true };
+    if (h?.away && focused) h = raw === "done" ? { seen: true } : undefined;
+  }
+  if (h) held.set(block, h);
+  else held.delete(block);
+  return h?.seen ? "idle" : h ? "done" : raw;
+}
+
 let dirty = false;
 function publish() {
   dirty = false;
   const agents = [];
+  const before = JSON.stringify([...held]);
+  for (const block of held.keys()) if (!blocks.get(block)?.records.size) held.delete(block);
   for (const [block, b] of blocks) {
     if (!b.records.size) continue;
+    const state = holdDone(block, b);
     const root = b.records.get("");
     const project = b.project ?? projectFor(null, b.session);
     const subs = [...b.records].filter(([id]) => id !== "").map(([id, r]) => ({ id, title: r.title ?? id, state: r.state === "error" ? "blocked" : r.state, msg: r.msg ?? "" }));
     agents.push({
       block, session: b.session, sessionLabel: sessionLabels.get(b.session) ?? "", window: blockInfo.get(block)?.window ?? null,
       label: blockInfo.get(block)?.label ?? "", app: root?.effective_app ?? root?.app ?? "",
-      state: agentState(b) === "error" ? "blocked" : agentState(b), failed: root?.state === "error", kind: root?.kind ?? null,
+      state: state === "error" ? "blocked" : state, failed: root?.state === "error", kind: root?.kind ?? null,
       msg: root?.msg ?? "", title: root?.title ?? "", progress: root?.progress ?? null, since: b.since?.at ?? Date.now(),
       project, partner: partnerOf(project), cwd: b.cwd, subs,
     });
@@ -164,6 +193,7 @@ function publish() {
     sessions: [...sessionLabels].map(([id, label]) => ({ id, label })),
     windows: [...windowLabels].map(([id, w]) => ({ id, session: w.session, label: w.label })),
   });
+  if (JSON.stringify([...held]) !== before) writeJson(HELD_FILE, Object.fromEntries(held));
   try { syncLabels(agents); } catch (error) { log(`labels failed: ${error}`); }
 }
 // --- Tab names. Rex's own sidebar can't be extended, but it shows each tab's label, so with
@@ -219,6 +249,7 @@ function refreshSession(id) {
   const v = view(id);
   if (!v) return;
   sessionLabels.set(id, v.label ?? "");
+  focusOf.set(id, (v.windows ?? []).find((w) => w.window_id === v.active_window_id)?.focused_block_id ?? null);
   for (const [win, w] of windowLabels) if (w.session === id) windowLabels.delete(win);
   for (const win of v.windows ?? []) {
     windowLabels.set(win.window_id, { session: id, label: win.label ?? "" });
