@@ -38,7 +38,6 @@ export function runTrainer() {
     let y = plate(s, "TRAINER CARD", () => app.quit());
     s.fill(1, y, W - 2, H - y - 1, C.green, C.lcd);
     y++;
-    const room = (rows) => y + rows < H - 1;
 
     // Who you are: the lead, the trainer level and its XP, and the totals.
     s.fill(X - 1, y, IW + 2, 4, C.band, C.cream);
@@ -71,152 +70,181 @@ export function runTrainer() {
     });
     y += 5;
 
-    // Today's quests and this week's: the tier reached in its colour, the goal for the next tier,
-    // what it pays and the count. A daily quest with no tier yet can be rerolled (1-3, or a click).
+    // Two columns under the identity rows, like Herdr's card: what you're working toward (quests, the
+    // gym, the bag, Professor Oak) on the left, what you have (party, badges, medals, recent catches)
+    // on the right. A narrow pane stacks them.
+    const two = IW >= 100;
+    const LW = two ? Math.floor((IW - 3) / 2) : IW;
+    const L = { x: X, w: LW }, Rc = two ? { x: X + LW + 3, w: IW - LW - 3 } : L;
+    const fits = (cy, rows) => cy + rows < H - 1;
     const qs = questsNow(g);
-    if (room(qs.length + 1)) {
-      heading(s, "h:quests", X, y, "QUESTS");
-      qs.forEach((q, i) => {
-        const qy = y + 1 + i;
-        s.fill(X - 1, qy, IW + 2, 1, C.band, C.cream);
-        s.put(X, qy, q.weekly ? "WEEK" : "DAY", { fg: C.mute });
-        s.put(X + 5, qy, q.tier ? TIERS[q.tier - 1] : "—", { fg: q.tier ? TIER_COLOR[q.tier - 1] : C.mute, bold: !!q.tier });
-        const count = `${q.n}/${q.need}`;
-        const tail = q.done ? "" : q.reward ?? "";
-        const gw = IW - 13 - len(count) - (tail ? len(tail) + 2 : 0);
-        s.put(X + 12, qy, clip(`${q.rerollable ? `${i + 1} ` : ""}${q.goal}`, gw), { fg: q.done ? C.soft : C.cream });
-        if (tail && gw > 10) s.put(X + IW - len(count) - len(tail) - 2, qy, tail, { fg: C.mute });
-        s.put(X + IW - len(count), qy, count, { fg: q.done ? C.gold : C.cream, bold: true });
-        if (q.rerollable) s.hit(X - 1, qy, IW + 2, 1, () => reroll(q));
-      });
-      y += qs.length + 2;
-    }
+    const ly = drawLeft(L, y);
+    drawRight(Rc, two ? y : ly);
 
-    // The open gym (any one option beats it), the Elite Four member of the week, or the Hall of Fame.
-    const gv = gymNow(g), ch = gv.gym ?? gv.league;
-    const gymRows = ch ? ch.options.length : gv.fame ? 3 : 0;
-    if (gymRows && room(gymRows + 1)) {
-      const title = gv.gym ? `GYM ${ch.index + 1}/${GYMS.length} · ${ch.leader.toUpperCase()}` : gv.league ? `ELITE FOUR ${ch.index + 1}/4 · ${ch.leader.toUpperCase()}` : "HALL OF FAME";
-      heading(s, "h:gym", X, y, title);
-      const note = gv.gym ? `${ch.name} Badge${ch.head ? " · Classic head start" : ""}` : gv.league ? (ch.waiting ? "from next Monday" : "this week only") : `Champion since ${new Date(gv.fame.at).toLocaleDateString()}`;
-      s.put(X + IW - len(note), y, note, { fg: C.mute });
-      if (ch) ch.options.forEach((o, i) => {
-        const oy = y + 1 + i, count = o.parts.map((p) => `${p.n}/${p.need}`).join(" + "), bw = 10;
-        s.fill(X - 1, oy, IW + 2, 1, C.band, C.cream);
-        if (i) s.put(X, oy, "OR", { fg: C.mute });
-        s.put(X + 4, oy, clip(o.goal.charAt(0).toUpperCase() + o.goal.slice(1), IW - 6 - len(count) - bw), { fg: o.done ? C.soft : C.cream });
-        s.bar(X + IW - len(count) - bw - 1, oy, bw, Math.min(...o.parts.map((p) => p.n / p.need)), C.lcd, C.green);
-        s.put(X + IW - len(count), oy, count, { fg: o.done ? C.gold : C.cream, bold: true });
-      });
-      else gv.fame.party.forEach((m, i) => {
-        if (X + i * 7 + 6 > X + IW) return;
-        s.image(`fame:${i}:${m.id}`, sprite(m.id), X + i * 7, y + 1, 6, 3);
-      });
-      y += gymRows + 2;
-    }
-
-    // The party, two by two: the lead on a raised band, the Day Care with a share of the XP.
-    const gift = GIFTS.find((x) => x.tr === g.gifts.pending[0]);
-    heading(s, "h:party", X, y, `PARTY ${party.length}/6`);
-    const right = gift ? `A gift is waiting: ${gift.ids.map(nameOf).join(" or ")} · g` : `p change · Day Care ${Math.round(DAYCARE * 100)}%`;
-    s.put(X + IW - len(right), y, right, { fg: gift ? C.amber : C.mute, bold: !!gift });
-    if (gift) s.hit(X + IW - len(right), y, len(right), 1, () => open("gift"));
-    y++;
-    if (!party.length) {
-      s.fill(X - 1, y, IW + 2, 2, C.lcd, C.ink);
-      s.put(X, y, clip("Choose your starter: Bulbasaur, Charmander or Squirtle · c", IW), { fg: C.ink, bold: true });
-      s.put(X, y + 1, clip(g.bank ? `${g.bank} XP is waiting for it.` : "It leads your party and earns your agents' XP.", IW), { fg: C.green });
-      s.hit(X - 1, y, IW + 2, 2, () => open("starter"));
-      y += 3;
-    }
-    const colW = Math.floor((IW + 1) / 2);
-    party.forEach((p, i) => {
-      const x = X - 1 + (i % 2) * colW, ry = y + Math.floor(i / 2) * 2;
-      if (!room(2) || ry + 2 > H - 1) return;
-      const { into: lvInto } = progress(p.xp);
-      s.fill(x, ry, colW - 1, 2, i === 0 ? C.band : C.green, C.cream);
-      s.image(`x:${i}:${p.id}`, sprite(p.id), x + 1, ry, 4, 2);
-      s.pixel(`pn:${i}`, x + 6, ry, clip(nameOf(p.id).toUpperCase(), 13), "cream");
-      if (g.shiny.includes(p.id)) s.put(x + 19, ry, "✦", { fg: C.gold });
-      const lv = `LV ${p.level}`;
-      s.pixel(`pl:${i}`, x + colW - 2 - len(lv), ry, lv, "cream");
-      const bw = Math.max(4, colW - 30);
-      s.put(x + 6, ry + 1, i === 0 ? "LEAD" : `DAY CARE ${Math.round(DAYCARE * 100)}%`, { fg: i === 0 ? C.amber : C.mute, bold: i === 0 });
-      s.bar(x + 21, ry + 1, bw, lvInto, C.lcd, C.band);
-      s.put(x + colW - 2 - len(`${p.xp} XP`), ry + 1, `${p.xp} XP`, { fg: C.mute });
-      s.hit(x, ry, colW - 1, 2, () => open("party"));
-    });
-    if (party.length) y += Math.ceil(party.length / 2) * 2 + 1;
-
-    // Badges: earned ones in colour on a band, the rest an empty socket.
-    if (room(4)) {
-      heading(s, "h:badges", X, y, "BADGES");
-      const bw = Math.max(6, Math.min(11, Math.floor((IW + 1) / BADGES.length)));
-      BADGES.forEach((b, i) => {
-        const x = X + i * bw, got = g.badges.includes(b.id);
-        if (x + bw - 1 > X + IW) return;
-        s.fill(x, y + 1, bw - 1, 2, C.band, C.ink);
-        if (got && !b.rank) s.image(`b:${b.id}`, badgeArt(b.id), x + Math.floor((bw - 5) / 2), y + 1, 4, 2, { crop: false });
-        else s.put(x + Math.floor((bw - 2) / 2), y + 1, got ? "★" : "◇", { fg: got ? C.gold : C.mute, bold: got });
-        s.pixel(`bn:${b.id}`, x, y + 3, clip(b.id === "elite" ? "ELITE 4" : b.name.toUpperCase(), bw - 1), got ? "cream" : "mute");
-      });
-      y += 5;
-      // Side medals and Classic medals (badges from before the gyms): never required for anything.
-      const medals = [
-        ...MEDALS.filter((m) => g.medals.includes(m.id)).map((m) => [m.color, m.name]),
-        ...BADGES.filter((b) => g.classic.includes(b.id)).map((b) => [b.color, `Classic ${b.name}`]),
-      ];
-      if (medals.length && room(2)) {
-        s.fill(X - 1, y - 1, IW + 2, 1, C.band, C.cream);
-        let mx = X;
-        for (const [color, label] of medals) {
-          if (mx + len(label) + 2 > X + IW) break;
-          s.put(mx, y - 1, "●", { fg: color });
-          s.put(mx + 2, y - 1, label, { fg: C.cream });
-          mx += len(label) + 4;
-        }
-        y += 1;
-      }
-    }
-
-    // The bag on one line: PokeDollars and Rested XP first, then balls, stones and cables.
-    if (room(2)) {
-      heading(s, "h:bag", X, y, "BAG");
-      const items = [
-        ...(g.money ? [[C.gold, `${g.money} PokeDollars`]] : []),
-        ...(g.rested ? [[C.cyan, `Rested: next ${g.rested} XP x2`]] : []),
-        ...Object.entries(g.bag).filter(([, n]) => n > 0).map(([item, n]) => [ITEMS[item]?.color ?? C.lcd, `${ITEMS[item]?.name ?? item} ×${n}`]),
-      ];
-      s.fill(X - 1, y + 1, IW + 2, 1, C.band, C.cream);
-      let bx = X;
-      if (!items.length) s.put(bx, y + 1, "Empty. Long tasks, active days and quests fill it.", { fg: C.mute });
+    // Items as dots and labels, wrapping onto up to `max` rows from `cy`; returns the rows used.
+    function dots(c, cy, items, max) {
+      let row = 0, bx = c.x;
+      s.fill(c.x - 1, cy, c.w + 2, 1, C.band, C.cream);
       for (const [color, label] of items) {
-        if (bx + len(label) + 2 > X + IW) break;
-        s.put(bx, y + 1, "●", { fg: color });
-        s.put(bx + 2, y + 1, label, { fg: C.cream });
-        bx += len(label) + 5;
+        if (bx + len(label) + 2 > c.x + c.w && bx > c.x) {
+          if (row + 1 >= max || !fits(cy + row + 1, 1)) break;
+          row++;
+          bx = c.x;
+          s.fill(c.x - 1, cy + row, c.w + 2, 1, C.band, C.cream);
+        }
+        s.put(bx, cy + row, "●", { fg: color });
+        s.put(bx + 2, cy + row, clip(label, c.w - 2), { fg: C.cream });
+        bx += len(label) + 4;
       }
-      y += 3;
+      return row + 1;
     }
 
-    // Professor Oak's first steps while the tutorial lasts, then recent catches.
-    if (Array.isArray(g.tutorial) && room(4)) {
-      heading(s, "h:oak", X, y, `PROFESSOR OAK ${g.tutorial.length}/${TUTORIAL.length}`);
-      s.put(X + 22, y, "5 Poke Balls and your Pokedex", { fg: C.mute });
-      const cw = Math.floor(IW / 2);
-      TUTORIAL.forEach((t, i) => {
-        const x = X + Math.floor(i / 3) * cw, done = g.tutorial.includes(t.id);
-        s.put(x, y + 1 + (i % 3), done ? "✓" : "·", { fg: done ? C.done : C.cyan, bold: true });
-        s.put(x + 2, y + 1 + (i % 3), clip(t.goal, cw - 3), { fg: done ? C.mute : C.cream });
+    function drawLeft(c, cy) {
+      // Today's quests and this week's: the tier reached in its colour, the goal for the next tier,
+      // what it pays when there's room, and the count. A daily quest with no tier yet can be rerolled
+      // (1-3, or a click).
+      if (fits(cy, qs.length + 1)) {
+        heading(s, "h:quests", c.x, cy, "QUESTS");
+        qs.forEach((q, i) => {
+          const qy = cy + 1 + i;
+          s.fill(c.x - 1, qy, c.w + 2, 1, C.band, C.cream);
+          s.put(c.x, qy, q.weekly ? "WEEK" : "DAY", { fg: C.mute });
+          s.put(c.x + 5, qy, q.tier ? TIERS[q.tier - 1] : "—", { fg: q.tier ? TIER_COLOR[q.tier - 1] : C.mute, bold: !!q.tier });
+          const count = `${q.n}/${q.need}`;
+          let tail = q.done ? "" : q.reward ?? "";
+          if (c.w - 13 - len(count) - len(tail) - 2 < 24) tail = "";
+          const gw = c.w - 13 - len(count) - (tail ? len(tail) + 2 : 0);
+          s.put(c.x + 12, qy, clip(`${q.rerollable ? `${i + 1} ` : ""}${q.goal}`, gw), { fg: q.done ? C.soft : C.cream });
+          if (tail) s.put(c.x + c.w - len(count) - len(tail) - 2, qy, tail, { fg: C.mute });
+          s.put(c.x + c.w - len(count), qy, count, { fg: q.done ? C.gold : C.cream, bold: true });
+          if (q.rerollable) s.hit(c.x - 1, qy, c.w + 2, 1, () => reroll(q));
+        });
+        cy += qs.length + 2;
+      }
+
+      // The open gym (any one option beats it), the Elite Four member of the week, or the Hall of Fame.
+      const gv = gymNow(g), ch = gv.gym ?? gv.league;
+      const gymRows = ch ? ch.options.length + 1 : gv.fame ? 4 : 0;
+      if (gymRows && fits(cy, gymRows)) {
+        const title = gv.gym ? `GYM ${ch.index + 1}/${GYMS.length} · ${ch.leader.toUpperCase()}` : gv.league ? `ELITE 4 ${ch.index + 1}/4 · ${ch.leader.toUpperCase()}` : "HALL OF FAME";
+        heading(s, "h:gym", c.x, cy, title);
+        const note = gv.gym ? `${ch.name} Badge${ch.head ? " · head start" : ""}` : gv.league ? (ch.waiting ? "from next Monday" : "this week only") : `Champion since ${new Date(gv.fame.at).toLocaleDateString()}`;
+        // The note gets its own row: the pixel title can take most of a column.
+        s.fill(c.x - 1, cy + 1, c.w + 2, 1, C.green, C.cream);
+        s.put(c.x, cy + 1, clip(note, c.w), { fg: C.mute });
+        if (ch) ch.options.forEach((o, i) => {
+          const oy = cy + 2 + i, count = o.parts.map((p) => `${p.n}/${p.need}`).join(" + "), bw = Math.min(10, Math.max(4, c.w - 40));
+          s.fill(c.x - 1, oy, c.w + 2, 1, C.band, C.cream);
+          if (i) s.put(c.x, oy, "OR", { fg: C.mute });
+          s.put(c.x + 3, oy, clip(o.goal.charAt(0).toUpperCase() + o.goal.slice(1), c.w - 5 - len(count) - bw), { fg: o.done ? C.soft : C.cream });
+          s.bar(c.x + c.w - len(count) - bw - 1, oy, bw, Math.min(...o.parts.map((p) => p.n / p.need)), C.lcd, C.green);
+          s.put(c.x + c.w - len(count), oy, count, { fg: o.done ? C.gold : C.cream, bold: true });
+        });
+        else gv.fame.party.forEach((m, i) => {
+          if (i * 7 + 6 > c.w) return;
+          s.image(`fame:${i}:${m.id}`, sprite(m.id), c.x + i * 7, cy + 2, 6, 3);
+        });
+        cy += gymRows + 2;
+      }
+
+      // The bag: PokeDollars and Rested XP first, then balls, stones and cables, wrapping.
+      if (fits(cy, 2)) {
+        heading(s, "h:bag", c.x, cy, "BAG");
+        const items = [
+          ...(g.money ? [[C.gold, `${g.money} PokeDollars`]] : []),
+          ...(g.rested ? [[C.cyan, `Rested: next ${g.rested} XP x2`]] : []),
+          ...Object.entries(g.bag).filter(([, n]) => n > 0).map(([item, n]) => [ITEMS[item]?.color ?? C.lcd, `${ITEMS[item]?.name ?? item} ×${n}`]),
+        ];
+        if (!items.length) {
+          s.fill(c.x - 1, cy + 1, c.w + 2, 1, C.band, C.cream);
+          s.put(c.x, cy + 1, clip("Empty. Long tasks, active days and quests fill it.", c.w), { fg: C.mute });
+          cy += 3;
+        } else cy += dots(c, cy + 1, items, 4) + 2;
+      }
+
+      // Professor Oak's first steps while the tutorial lasts.
+      if (Array.isArray(g.tutorial) && fits(cy, 4)) {
+        heading(s, "h:oak", c.x, cy, `PROFESSOR OAK ${g.tutorial.length}/${TUTORIAL.length}`);
+        const cw = Math.floor(c.w / 2);
+        TUTORIAL.forEach((t, i) => {
+          const x = c.x + Math.floor(i / 3) * cw, done = g.tutorial.includes(t.id);
+          s.put(x, cy + 1 + (i % 3), done ? "✓" : "·", { fg: done ? C.done : C.cyan, bold: true });
+          s.put(x + 2, cy + 1 + (i % 3), clip(t.goal, cw - 3), { fg: done ? C.mute : C.cream });
+        });
+        cy += 5;
+      }
+      return cy;
+    }
+
+    function drawRight(c, cy) {
+      // The party: the lead on a raised band, the Day Care with a share of the XP. Two by two when the
+      // column is wide enough, else one per row.
+      const gift = GIFTS.find((x) => x.tr === g.gifts.pending[0]);
+      heading(s, "h:party", c.x, cy, `PARTY ${party.length}/6`);
+      const note = gift ? `Gift: ${gift.ids.map(nameOf).join(" or ")} · g` : `p change · Day Care ${Math.round(DAYCARE * 100)}%`;
+      s.put(c.x + c.w - len(note), cy, note, { fg: gift ? C.amber : C.mute, bold: !!gift });
+      if (gift) s.hit(c.x + c.w - len(note), cy, len(note), 1, () => open("gift"));
+      cy++;
+      if (!party.length) {
+        s.fill(c.x - 1, cy, c.w + 2, 2, C.lcd, C.ink);
+        s.put(c.x, cy, clip("Choose your starter: Bulbasaur, Charmander or Squirtle · c", c.w), { fg: C.ink, bold: true });
+        s.put(c.x, cy + 1, clip(g.bank ? `${g.bank} XP is waiting for it.` : "It leads your party and earns your agents' XP.", c.w), { fg: C.green });
+        s.hit(c.x - 1, cy, c.w + 2, 2, () => open("starter"));
+        cy += 3;
+      }
+      const per = c.w >= 70 ? 2 : 1;
+      const colW = Math.floor((c.w + 1) / per);
+      party.forEach((p, i) => {
+        const x = c.x - 1 + (i % per) * colW, ry = cy + Math.floor(i / per) * 2;
+        if (!fits(ry, 2)) return;
+        const { into: lvInto } = progress(p.xp);
+        s.fill(x, ry, colW - 1, 2, i === 0 ? C.band : C.green, C.cream);
+        s.image(`x:${i}:${p.id}`, sprite(p.id), x + 1, ry, 4, 2);
+        s.pixel(`pn:${i}`, x + 6, ry, clip(nameOf(p.id).toUpperCase(), 13), "cream");
+        if (g.shiny.includes(p.id)) s.put(x + 19, ry, "✦", { fg: C.gold });
+        const lv = `LV ${p.level}`;
+        s.pixel(`pl:${i}`, x + colW - 2 - len(lv), ry, lv, "cream");
+        const xp = `${p.xp} XP`, bw = Math.max(4, colW - 24 - len(xp));
+        s.put(x + 6, ry + 1, i === 0 ? "LEAD" : `DAY CARE ${Math.round(DAYCARE * 100)}%`, { fg: i === 0 ? C.amber : C.mute, bold: i === 0 });
+        s.bar(x + 20, ry + 1, bw, lvInto, C.lcd, C.band);
+        s.put(x + colW - 2 - len(xp), ry + 1, xp, { fg: C.mute });
+        s.hit(x, ry, colW - 1, 2, () => open("party"));
       });
-    } else if (room(4)) {
-      heading(s, "h:recent", X, y, "RECENT CATCHES");
-      if (!g.recent.length) s.put(X, y + 2, clip("None yet. Wild Pokemon wait in the tall grass after finished tasks.", IW), { fg: C.mute });
-      g.recent.slice(0, Math.floor(IW / 7)).forEach((r, i) => {
-        const x = X + i * 7;
-        s.image(`r:${i}:${r.id}`, sprite(r.id), x, y + 1, 6, 3);
-        if (g.shiny.includes(r.id)) s.put(x + 2, y + 4, "✦✦", { fg: C.gold });
-      });
+      if (party.length) cy += Math.ceil(party.length / per) * 2 + 1;
+
+      // Badges: earned ones in colour on a band, the rest an empty socket. Then side and Classic medals.
+      if (fits(cy, 4)) {
+        heading(s, "h:badges", c.x, cy, "BADGES");
+        const bw = Math.max(5, Math.min(11, Math.floor((c.w + 1) / BADGES.length)));
+        BADGES.forEach((b, i) => {
+          const x = c.x + i * bw, got = g.badges.includes(b.id);
+          if (x + bw - 1 > c.x + c.w) return;
+          s.fill(x, cy + 1, bw - 1, 2, C.band, C.ink);
+          if (got && !b.rank) s.image(`b:${b.id}`, badgeArt(b.id), x + Math.floor((bw - 5) / 2), cy + 1, 4, 2, { crop: false });
+          else s.put(x + Math.floor((bw - 2) / 2), cy + 1, got ? "★" : "◇", { fg: got ? C.gold : C.mute, bold: got });
+          s.put(x, cy + 3, clip(b.id === "elite" ? "ELITE4" : b.name.toUpperCase(), bw - 1), { fg: got ? C.cream : C.mute });
+        });
+        cy += 4;
+        const medals = [
+          ...MEDALS.filter((m) => g.medals.includes(m.id)).map((m) => [m.color, m.name]),
+          ...BADGES.filter((b) => g.classic.includes(b.id)).map((b) => [b.color, `Classic ${b.name}`]),
+        ];
+        if (medals.length && fits(cy, 1)) cy += dots(c, cy, medals, 3);
+        cy++;
+      }
+
+      // Recent catches.
+      if (fits(cy, 4)) {
+        heading(s, "h:recent", c.x, cy, "RECENT CATCHES");
+        if (!g.recent.length) s.put(c.x, cy + 2, clip("None yet. Wild Pokemon wait in the tall grass after finished tasks.", c.w), { fg: C.mute });
+        g.recent.slice(0, Math.floor(c.w / 7)).forEach((r, i) => {
+          const x = c.x + i * 7;
+          s.image(`r:${i}:${r.id}`, sprite(r.id), x, cy + 1, 6, 3);
+          if (g.shiny.includes(r.id)) s.put(x + 2, cy + 4, "✦✦", { fg: C.gold });
+        });
+        cy += 5;
+      }
+      return cy;
     }
 
     const o = options();
