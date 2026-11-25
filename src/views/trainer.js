@@ -1,11 +1,11 @@
-// The trainer card: who you are (lead, trainer level, totals), today's quests, the party, the badges,
-// the bag and recent catches (Professor Oak's steps while the tutorial lasts). It also hosts the
+// The trainer card: who you are (lead, trainer level, totals), today's quests, the open gym (or the
+// Elite Four, or the Hall of Fame), the party, the badges and side medals, the bag and recent catches (Professor Oak's steps while the tutorial lasts). It also hosts the
 // starter choice, the New Pokedex explainer, waiting gifts and the party editor (party.js).
 // The look matches pokemon-herdr's card: a red frame around one dark screen, sections on tonal bands
 // instead of light slabs, amber for what's best (the lead, Gold quests, shinies).
 import { remoteState } from "herdr";
-import { game, partyOf, progress, nameOf, options, BADGES, ITEMS, GIFTS, DAYCARE, TUTORIAL, TIERS, STREAK_NEED } from "../game.js";
-import { caught, sprite, badgeArt, questsNow, streakNow, weekNow } from "../core.js";
+import { game, partyOf, progress, nameOf, options, BADGES, MEDALS, GYMS, ITEMS, GIFTS, DAYCARE, TUTORIAL, TIERS, STREAK_NEED } from "../game.js";
+import { caught, sprite, badgeArt, questsNow, streakNow, weekNow, gymNow } from "../core.js";
 import { call, shareOnX, shareMessage } from "../client.js";
 import { C, runApp, clip, len } from "../term.js";
 import { plate } from "./chrome.js";
@@ -92,6 +92,29 @@ export function runTrainer() {
       y += qs.length + 2;
     }
 
+    // The open gym (any one option beats it), the Elite Four member of the week, or the Hall of Fame.
+    const gv = gymNow(g), ch = gv.gym ?? gv.league;
+    const gymRows = ch ? ch.options.length : gv.fame ? 3 : 0;
+    if (gymRows && room(gymRows + 1)) {
+      const title = gv.gym ? `GYM ${ch.index + 1}/${GYMS.length} · ${ch.leader.toUpperCase()}` : gv.league ? `ELITE FOUR ${ch.index + 1}/4 · ${ch.leader.toUpperCase()}` : "HALL OF FAME";
+      heading(s, "h:gym", X, y, title);
+      const note = gv.gym ? `${ch.name} Badge${ch.head ? " · Classic head start" : ""}` : gv.league ? (ch.waiting ? "from next Monday" : "this week only") : `Champion since ${new Date(gv.fame.at).toLocaleDateString()}`;
+      s.put(X + IW - len(note), y, note, { fg: C.mute });
+      if (ch) ch.options.forEach((o, i) => {
+        const oy = y + 1 + i, count = o.parts.map((p) => `${p.n}/${p.need}`).join(" + "), bw = 10;
+        s.fill(X - 1, oy, IW + 2, 1, C.band, C.cream);
+        if (i) s.put(X, oy, "OR", { fg: C.mute });
+        s.put(X + 4, oy, clip(o.goal.charAt(0).toUpperCase() + o.goal.slice(1), IW - 6 - len(count) - bw), { fg: o.done ? C.soft : C.cream });
+        s.bar(X + IW - len(count) - bw - 1, oy, bw, Math.min(...o.parts.map((p) => p.n / p.need)), C.lcd, C.green);
+        s.put(X + IW - len(count), oy, count, { fg: o.done ? C.gold : C.cream, bold: true });
+      });
+      else gv.fame.party.forEach((m, i) => {
+        if (X + i * 7 + 6 > X + IW) return;
+        s.image(`fame:${i}:${m.id}`, sprite(m.id), X + i * 7, y + 1, 6, 3);
+      });
+      y += gymRows + 2;
+    }
+
     // The party, two by two: the lead on a raised band, the Day Care with a share of the XP.
     const gift = GIFTS.find((x) => x.tr === g.gifts.pending[0]);
     heading(s, "h:party", X, y, `PARTY ${party.length}/6`);
@@ -138,6 +161,22 @@ export function runTrainer() {
         s.pixel(`bn:${b.id}`, x, y + 3, clip(b.id === "elite" ? "ELITE 4" : b.name.toUpperCase(), bw - 1), got ? "cream" : "mute");
       });
       y += 5;
+      // Side medals and Classic medals (badges from before the gyms): never required for anything.
+      const medals = [
+        ...MEDALS.filter((m) => g.medals.includes(m.id)).map((m) => [m.color, m.name]),
+        ...BADGES.filter((b) => g.classic.includes(b.id)).map((b) => [b.color, `Classic ${b.name}`]),
+      ];
+      if (medals.length && room(2)) {
+        s.fill(X - 1, y - 1, IW + 2, 1, C.band, C.cream);
+        let mx = X;
+        for (const [color, label] of medals) {
+          if (mx + len(label) + 2 > X + IW) break;
+          s.put(mx, y - 1, "●", { fg: color });
+          s.put(mx + 2, y - 1, label, { fg: C.cream });
+          mx += len(label) + 4;
+        }
+        y += 1;
+      }
     }
 
     // The bag on one line: PokeDollars and Rested XP first, then balls, stones and cables.

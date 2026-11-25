@@ -54,7 +54,7 @@ Stone and trade evolutions need the item: Fire, Water, Thunder, Leaf and Moon St
 ![A wild Snorlax appeared over the workspace, with catch odds for each ball](docs/wild-encounter.png)
 
 - **3 free Poke Balls** per encounter, then any Poke Balls in your bag. Great Balls (×1.5) and Ultra Balls (×2) come from the bag too.
-- Base odds: **60%** for most, **35%** for final evolutions, **3%** for legendaries.
+- Base odds: **60%** for most, **35%** for final evolutions and for legendaries, which come from milestones (a bird for three weekly quests in a row, Mewtwo for the Champion, Mew after the other 150) and wait until caught. 40% of wild Pokemon are species you don't have yet.
 - **Keep working and it weakens.** Each task finished while it waits adds 25% to your odds, up to three times.
 - **The tall grass** holds up to 5 wild Pokemon. Each waits 24 hours, then leaves. Nothing opens on its own: the sidebar shows `Tall grass 2/5`; open it with `e`, a click or `ctrl+a e` and pick which one to throw at.
 - A toast for a new one depends on `pokedex set alert`: `smart` (the default) only while no agent is working, `on` always, `off` never.
@@ -75,7 +75,7 @@ All 151, searchable by name or number. Your catches are lit; the ones you're mis
 
 - **Your trainer level** comes from all the XP you ever earned: level *n* starts at `40 × n²`. **Gifts** arrive at trainer levels 5 (Eevee), 10 (Lapras), 15 (Omanyte or Kabuto), 20 (Hitmonlee or Hitmonchan) and 30 (Porygon); when there's a choice, the card asks (`g`).
 - **Your party**, the lead first. `p` opens the party editor: `enter` makes a Pokemon the lead, `space` adds or removes it, `1`-`3` use a stone or the Link Cable.
-- **Eight Kanto badges** and two ranks past them: Elite Four at 1,000 tasks, Champion with all eight badges. Rainbow needs a 2-week streak and Volcano an 8-week one.
+- **Eight gyms**, one open at a time, shown on the card with every way to win it: Brock (5 active days), Misty (blocked agents answered), Lt. Surge (commits), Erika (variety), Koga (Silver quests), Sabrina (long tasks), Blaine (an 8-week streak or 30 active days), Giovanni (Lv 50 and 100 caught). Counts are sized to your own median. Then the **Elite Four**, one member a week, and **Champion**: your team goes into the Hall of Fame. Task counts earn side medals (Rookie, Veteran, Marathon); badges from before the gyms stay as Classic medals and give their gym a head start.
 - **Three daily quests and one weekly, sized to you.** Each has **Bronze, Silver and Gold** at 50%, 100% and 150% of your own median over the past two weeks, never below a floor, so a quiet week asks less of you and a heavy one asks more. Every tier pays: a daily quest gives a Great Ball, then two, then an Ultra Ball and 50 PokéDollars. A quest is only offered when your last 30 days show you can do it, and `1`-`3` (or a click) **rerolls** one that hasn't paid yet, once a day.
 - **Your streak**, which counts days rather than amount: a day keeps it when 5 of the 7 days ending with it were active, so any two days off a week are fine. A **Streak Freeze** arrives every 7 active days (2 at most) and spends itself on a missing day that would otherwise break it. The card shows how many you hold.
 - **Your bag**, your PokéDollars, any Rested XP waiting, and your recent catches.

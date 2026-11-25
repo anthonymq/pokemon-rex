@@ -8,7 +8,10 @@
 //   encounters: {seen, caught, fled}, recent: [{id, at}], bag: {item: n}, dex: {id: {at, project, how}},
 //   fainted: {project: true}, happy: {project: true}, quests: {day, week, d, w, daily, spare, weekly, rerolled},
 //   lastTurn, digest: {levels, items: {item: n}, quests}, version, rested, money, tutorial: [step ids] | null,
-//   stats: {days: {day: {turns, ms, xp, seen, caught, fled, left, fast, long, variety, quests, gold, frozen}}, lengths: [ms]} }
+//   gyms: {at, since, need, c, head} (the open gym), league: {at, week, c} | null (the Elite Four),
+//   medals: [ids], classic: [badge ids from before the gyms], legends: {run, week, mew}, fame: {at, party} | null,
+//   stats: {days: {day: {turns, ms, xp, seen, caught, fled, left, fast, answered, long, variety, quests, silver,
+//   gold, commit, green, merged, frozen}}, lengths: [ms]} }
 // Options live in shared("pokedex.options"): {alert: "off" | "on" | "smart", hardMode}.
 // `stats` is private: it stays in the local save and is never shared.
 // A project key is the space's git repo root (machine-qualified for remote spaces), else its name.
@@ -92,20 +95,68 @@ export const ITEMS = {
 };
 const STONES = ["fire", "water", "thunder", "leaf", "moon"];
 
-const KANTO = ["boulder", "cascade", "thunder", "rainbow", "soul", "marsh", "volcano", "earth"];
-export const BADGES = [
-  { id: "boulder", name: "Boulder", color: "#a8a29a", goal: "Catch 10 Pokemon", test: (g, c) => c >= 10 },
-  { id: "cascade", name: "Cascade", color: "#5aa9e6", goal: "Finish 50 agent tasks", test: (g) => g.tasks >= 50 },
-  { id: "thunder", name: "Thunder", color: "#f2c94c", goal: "Evolve a partner", test: (g) => g.evolutions >= 1 },
-  { id: "rainbow", name: "Rainbow", color: "#9be29b", goal: "Keep a 2-week streak", test: (g) => g.streak.best >= 14 },
-  { id: "soul", name: "Soul", color: "#e58ad6", goal: "Catch 75 Pokemon", test: (g, c) => c >= 75 },
-  { id: "marsh", name: "Marsh", color: "#d4af37", goal: "Finish 500 agent tasks", test: (g) => g.tasks >= 500 },
-  { id: "volcano", name: "Volcano", color: "#ef6b4a", goal: "Keep an 8-week streak", test: (g) => g.streak.best >= 56 },
-  { id: "earth", name: "Earth", color: "#5fbf77", goal: "Catch all 151", test: (g, c) => c >= 151 },
-  // Ranks past the gyms: drawn as medals, not badge art.
-  { id: "elite", name: "Elite Four", rank: true, color: "#8e7cc3", goal: "Finish 1000 agent tasks", test: (g) => g.tasks >= 1000 },
-  { id: "champion", name: "Champion", rank: true, color: "#f2994a", goal: "Earn all 8 Kanto badges", test: (g) => KANTO.every((id) => g.badges.includes(id)) },
+// --- Gyms: eight leaders in order, one open at a time. A gym offers options, and any one won beats it;
+// an option's parts must all hold. A part counts from the day the gym opened, except `streak`, `level`
+// and `caught`, which read the save as it is. With `mult`, a part asks for that many active days of the
+// player's own median (over the 14 days before the gym opened), never under `min`.
+export const GYMS = [
+  { id: "boulder", leader: "Brock", name: "Boulder", color: "#a8a29a", options: [[{ key: "days", min: 5 }]] },
+  { id: "cascade", leader: "Misty", name: "Cascade", color: "#5aa9e6", options: [[{ key: "fast", min: 10, mult: 4 }], [{ key: "answered", min: 12, mult: 4 }]] },
+  { id: "thunder", leader: "Lt. Surge", name: "Thunder", color: "#f2c94c", options: [[{ key: "commit", min: 10, mult: 3 }], [{ key: "green", min: 10, mult: 3 }]] },
+  { id: "rainbow", leader: "Erika", name: "Rainbow", color: "#9be29b", options: [[{ key: "variety", min: 3 }], [{ key: "varied", min: 5 }]] },
+  { id: "soul", leader: "Koga", name: "Soul", color: "#e58ad6", options: [[{ key: "silver", min: 10 }], [{ key: "gold", min: 4 }]] },
+  { id: "marsh", leader: "Sabrina", name: "Marsh", color: "#d4af37", options: [[{ key: "merged", min: 3 }], [{ key: "long", min: 5, mult: 3 }]] },
+  { id: "volcano", leader: "Blaine", name: "Volcano", color: "#ef6b4a", options: [[{ key: "streak", min: 56 }], [{ key: "days", min: 30 }]] },
+  { id: "earth", leader: "Giovanni", name: "Earth", color: "#5fbf77", options: [[{ key: "level", min: 50 }, { key: "caught", min: 100 }], [{ key: "level", min: 50 }, { key: "catches", min: 30 }]] },
 ];
+// The Elite Four: after the eight badges, one member a week, in order. Only the member's week counts;
+// a week that falls short is tried again the next one. Beating Lance makes the player Champion.
+export const LEAGUE = [
+  { id: "lorelei", leader: "Lorelei", options: [[{ key: "silver", min: 3 }]] },
+  { id: "bruno", leader: "Bruno", options: [[{ key: "fast", min: 3 }], [{ key: "commit", min: 5 }], [{ key: "answered", min: 5 }]] },
+  { id: "agatha", leader: "Agatha", options: [[{ key: "varied", min: 2 }]] },
+  { id: "lance", leader: "Lance", options: [[{ key: "weekly", min: 1 }], [{ key: "silver", min: 6 }]] },
+];
+const NOW_KEYS = new Set(["streak", "level", "caught"]);
+const pl = (n) => (n > 1 ? "s" : "");
+const PART = {
+  days: (n) => `be active on ${n} days`,
+  fast: (n) => `answer ${n} blocked agent${pl(n)} within 2 minutes`,
+  answered: (n) => `answer ${n} blocked agent${pl(n)}`,
+  commit: (n) => `make ${n} commit${pl(n)}`,
+  green: (n) => `finish ${n} task${pl(n)} with green tests or CI`,
+  merged: (n) => `merge ${n} MR${pl(n)}`,
+  long: (n) => `finish ${n} task${pl(n)} that ran 10+ minutes`,
+  variety: (n) => `use ${n} branches, agents or repos in one day`,
+  varied: (n) => `use 2+ branches, agents or repos on ${n} day${pl(n)}`,
+  silver: (n) => `reach Silver on ${n} daily quest${pl(n)}`,
+  gold: (n) => `reach Gold on ${n} daily quest${pl(n)}`,
+  weekly: () => "reach Silver on the weekly quest",
+  streak: (n) => `keep a ${n / 7}-week streak`,
+  level: (n) => `train a Pokemon to Lv ${n}`,
+  caught: (n) => `catch ${n} Pokemon`,
+  catches: (n) => `catch ${n} wild Pokemon while this gym is open`,
+};
+const optionsText = (options, needs) => options.map((parts, i) => parts.map((p, j) => PART[p.key](needs?.[i]?.[j] ?? p.min)).join(" and ")).join(", or ");
+export const KANTO = GYMS.map((x) => x.id);
+export const BADGES = [
+  ...GYMS.map((x) => ({ id: x.id, name: x.name, color: x.color, leader: x.leader, goal: `Beat ${x.leader}: ${optionsText(x.options)}` })),
+  // Ranks past the gyms: drawn as medals, not badge art.
+  { id: "elite", name: "Elite Four", rank: true, color: "#8e7cc3", goal: "Earn all 8 badges to face the Elite Four" },
+  { id: "champion", name: "Champion", rank: true, color: "#f2994a", goal: "Beat the Elite Four, one member a week" },
+];
+// Side medals: never required for anything. Classic medals are the badges a save held before the gyms.
+export const MEDALS = [
+  { id: "tasks50", name: "Rookie", color: "#a8a29a", goal: "Finish 50 agent tasks", test: (g) => g.tasks >= 50 },
+  { id: "tasks500", name: "Veteran", color: "#d4af37", goal: "Finish 500 agent tasks", test: (g) => g.tasks >= 500 },
+  { id: "tasks1000", name: "Marathon", color: "#8e7cc3", goal: "Finish 1000 agent tasks", test: (g) => g.tasks >= 1000 },
+];
+// Legendaries come from milestones, never from the tall grass: a bird for three weekly quests done
+// (Bronze) in a row, Mewtwo for the Champion, Mew once the other 150 are caught. They wait in the grass until
+// caught, and don't flee.
+export const BIRDS = [144, 145, 146];
+const LEGEND_RATE = 0.35;
+export const MISSING_SHARE = 0.4; // share of encounters rolled from species not caught yet
 
 export function game() {
   const g = shared(GAME) ?? {};
@@ -123,6 +174,8 @@ export function game() {
     lastTurn: g.lastTurn ?? null, digest: g.digest ?? blankDigest(), rested: g.rested ?? 0, money: g.money ?? 0,
     // Professor Oak's steps done so far; null once finished, and for saves from before the tutorial.
     tutorial: g.tutorial !== undefined ? g.tutorial : Object.keys(g).length ? null : [],
+    gyms: g.gyms ?? null, league: g.league ?? null, medals: g.medals ?? [], classic: g.classic ?? [],
+    legends: g.legends ?? { run: 0, week: null, mew: false }, fame: g.fame ?? null,
     // A save written before versioning is version 1; a brand-new one starts at the current version.
     version: g.version ?? (Object.keys(g).length ? 1 : SAVE_VERSION), stats: g.stats ?? blankStats(),
   };
@@ -135,10 +188,12 @@ export function game() {
 //   3 -> 4: one party instead of a partner per project (see fromProjects).
 //   4 -> 5: active-day streaks (the streak and its best carry over, with a Streak Freeze per 7 active
 //           days already recorded, up to 2); no tutorial for a save that already played.
-export const SAVE_VERSION = 5;
+//   5 -> 6: gyms. Badges earned before become Classic medals (each gives its gym a 50% head start),
+//           task counts become side medals, and the gyms start from Brock.
+export const SAVE_VERSION = 6;
 // The rules' version: bump it with any change to what the rules compute, so an app whose copy of
 // this file is older or newer than the server's can say so (the server sends it with the state).
-export const RULES_VERSION = 2;
+export const RULES_VERSION = 3;
 const MIGRATIONS = {
   1: (g) => ({ ...g, stats: g.stats ?? blankStats() }),
   2: (g) => ({ ...g, wild: g.wild ?? (g.encounter ? [g.encounter] : []), fainted: {}, happy: g.happy ?? {} }),
@@ -147,6 +202,11 @@ const MIGRATIONS = {
     const active = Object.values(g.stats?.days ?? {}).filter((d) => d.turns > 0).length;
     const streak = { last: null, days: 0, best: 0, ...g.streak, freezes: Math.min(FREEZE_MAX, Math.floor(active / FREEZE_EVERY)), active };
     return { ...g, streak, tutorial: null, rested: 0, money: g.money ?? 0 };
+  },
+  5: (g) => {
+    const tasks = g.tasks ?? 0;
+    const medals = MEDALS.filter((m) => m.test({ tasks })).map((m) => m.id);
+    return { ...g, classic: g.badges ?? [], badges: [], medals, gyms: null, league: null, legends: { run: 0, week: null, mew: false }, fame: null };
   },
 };
 // Writes the game; `encounter` mirrors the head of the queue for views that show one Pokemon.
@@ -233,13 +293,36 @@ const blankStats = () => ({ days: {}, lengths: [] });
 // `fast`: blocked agents answered within FAST_MS; `long`: turns of 10+ minutes; `variety`: the most
 // branches, agents or repos used that day; `gold`: daily quests that reached Gold; `frozen`: a day
 // a Streak Freeze covered.
-const blankDay = () => ({ turns: 0, ms: 0, xp: 0, seen: 0, caught: 0, fled: 0, left: 0, fast: 0, long: 0, variety: 0, quests: 0, gold: 0 });
-// Adds n to today's `key` (or raises it to n with `max`). Mutates g.
+const blankDay = () => ({ turns: 0, ms: 0, xp: 0, seen: 0, caught: 0, fled: 0, left: 0, fast: 0, answered: 0, long: 0, variety: 0, quests: 0, silver: 0, gold: 0, commit: 0, green: 0, merged: 0 });
+// Adds n to today's `key` (or raises it to n with `max`), and to the open gym's and Elite Four's
+// counters. Mutates g.
 function tally(g, key, n = 1, max = false) {
   const s = g.stats ?? blankStats(), k = day(new Date());
   const today = { ...blankDay(), ...s.days[k] };
-  today[key] = max ? Math.max(today[key], n) : today[key] + n;
+  const prev = today[key] ?? 0;
+  today[key] = max ? Math.max(prev, n) : prev + n;
   g.stats = { ...s, days: { ...s.days, [k]: today } };
+  count(g, key, prev, today[key]);
+}
+// What a gym or Elite Four member counts: the first turn of a day is an active day, a day's variety
+// reaching 2 is a varied day, and the rest add up.
+const COUNTED = new Set(["turns", "caught", "variety", "fast", "answered", "long", "silver", "gold", "commit", "green", "merged", "weekly"]);
+function count(g, key, prev, now) {
+  if (!COUNTED.has(key) || now === prev) return;
+  if (!g.gyms) openGym(g, 0);
+  const add = (c0) => {
+    const c = { ...c0 };
+    if (key === "turns") { if (!prev) c.days = (c.days ?? 0) + 1; }
+    else if (key === "variety") {
+      c.variety = Math.max(c.variety ?? 0, now);
+      if (prev < 2 && now >= 2) c.varied = (c.varied ?? 0) + 1;
+    } else if (key === "caught") c.catches = (c.catches ?? 0) + (now - prev);
+    else c[key] = (c[key] ?? 0) + (now - prev);
+    return c;
+  };
+  if (g.gyms && g.gyms.at < GYMS.length) g.gyms = { ...g.gyms, c: add(g.gyms.c ?? {}) };
+  leagueWeek(g);
+  if (g.league && g.league.at < LEAGUE.length && g.league.week === week(new Date())) g.league = { ...g.league, c: add(g.league.c ?? {}) };
 }
 // The active days among the `span` days before day key `end` (not included).
 const before = (g, end, span) => Array.from({ length: span }, (_, i) => g.stats.days[addDays(end, -1 - i)]).filter((d) => d?.turns > 0);
@@ -321,8 +404,9 @@ const hash = (s) => [...s].reduce((h, c) => Math.imul(h ^ c.codePointAt(0), 1677
 const shinyChance = (g) => { const s = liveStreak(g); return s >= 30 ? 1 / 4 : s >= 7 ? 1 / 8 : 0; };
 export const catchRate = (id) => LEGENDARY.includes(id) ? 0.03 : FINAL.has(id) ? 0.35 : 0.6;
 // One throw's odds: the ball's bonus, and +25% for each task finished while the Pokemon waited (up to 3).
-export const throwRate = (e, ball = "poke") => Math.min(1, catchRate(e.id) * (ITEMS[ball]?.bonus ?? 1) * (1 + 0.25 * (e.weak ?? 0)));
-const expired = (e, now = Date.now()) => now - e.at > ENCOUNTER_MS;
+// A legendary earned from a milestone (`staying`) is as easy as a final form.
+export const throwRate = (e, ball = "poke") => Math.min(1, (e.staying ? LEGEND_RATE : catchRate(e.id)) * (ITEMS[ball]?.bonus ?? 1) * (1 + 0.25 * (e.weak ?? 0)));
+const expired = (e, now = Date.now()) => !e.staying && now - e.at > ENCOUNTER_MS;
 
 function gain(g, item, n = 1) {
   g.bag = { ...g.bag, [item]: (g.bag[item] ?? 0) + n };
@@ -344,19 +428,135 @@ function addCaught(g, ids, how = "met", project = null) {
 
 // `jingled`: an evolution already played its jingle in this save, so a badge earned with it stays quiet.
 function save(g, jingled = false) {
-  const count = (shared(CAUGHT) ?? []).length;
-  let earned = [];
-  // Twice, so a rank that needs the badges just earned (Champion) comes with them.
-  for (let pass = 0; pass < 2; pass++) {
-    const more = BADGES.filter((b) => !g.badges.includes(b.id) && b.test(g, count));
-    g.badges = [...g.badges, ...more.map((b) => b.id)];
-    earned = [...earned, ...more];
+  const news = [];
+  const medals = MEDALS.filter((m) => !g.medals.includes(m.id) && m.test(g));
+  g.medals = [...g.medals, ...medals.map((m) => m.id)];
+  for (const m of medals) news.push({ title: `${m.name} medal!`, body: m.goal });
+  advance(g, news);
+  // Mew shows up once the other 150 are in the Pokedex.
+  const have = shared(CAUGHT) ?? [];
+  if (!g.legends.mew && have.filter((id) => id !== 151).length >= 150) {
+    g.legends = { ...g.legends, mew: true };
+    summon(g, 151, "Something stirs in the tall grass...");
   }
-  if (earned.length) {
+  if (news.length) {
     if (!jingled) jingle("badge");
-    for (const b of earned) notify({ title: `${b.name} ${b.rank ? "rank reached" : "Badge earned"}!`, body: b.goal, level: "success" });
+    for (const n of news) notify({ ...n, level: "success" });
   }
   put(g);
+}
+
+// --- Gym progress.
+// The player's median per active day of `key` over the 14 days before day `k`.
+const baseOf14 = (g, k, key) => median(before(g, k, 14).map((d) => d[key] ?? 0));
+const needOf = (g, k, part) => Math.max(part.min, part.mult ? Math.ceil(part.mult * baseOf14(g, k, part.key) - 1e-9) : 0);
+// Opens gym `at` (GYMS.length: all beaten), its needs fixed from the player's pace now. A Classic badge
+// for it counts half of each need as done. Mutates g.
+function openGym(g, at) {
+  if (at >= GYMS.length) {
+    g.gyms = { at, since: day(new Date()), need: [], c: {}, head: false };
+    return;
+  }
+  const k = day(new Date());
+  g.gyms = { at, since: k, need: GYMS[at].options.map((parts) => parts.map((p) => needOf(g, k, p))), c: {}, head: g.classic.includes(GYMS[at].id) };
+}
+// How far a part is: its count (or the save's value), plus half the need with a head start.
+function partValue(g, key, c) {
+  if (key === "streak") return g.streak.days;
+  if (key === "level") return Math.max(0, ...Object.values(g.pokemon).map(levelOf));
+  if (key === "caught") return (shared(CAUGHT) ?? []).length;
+  return c[key] ?? 0;
+}
+function optionsView(g, options, need, c, head) {
+  return options.map((parts, i) => {
+    const ps = parts.map((p, j) => {
+      const n = need[i][j];
+      const have = partValue(g, p.key, c) + (head ? Math.ceil(n / 2) : 0);
+      return { key: p.key, need: n, n: Math.min(n, have), goal: PART[p.key](n) };
+    });
+    return { goal: ps.map((p) => p.goal).join(" and "), parts: ps, done: ps.every((p) => p.n >= p.need) };
+  });
+}
+// The Elite Four moves to a new week: counters start over (a member not beaten tries again).
+function leagueWeek(g) {
+  const wk = week(new Date());
+  if (g.league && g.league.at < LEAGUE.length && wk > g.league.week) g.league = { ...g.league, week: wk, c: {} };
+}
+// Beats every gym and Elite Four member whose challenge is met; news goes to `news`. Mutates g.
+function advance(g, news) {
+  if (!g.gyms) openGym(g, 0);
+  while (g.gyms.at < GYMS.length) {
+    const gym = GYMS[g.gyms.at];
+    if (!optionsView(g, gym.options, g.gyms.need, g.gyms.c ?? {}, g.gyms.head).some((o) => o.done)) break;
+    g.badges = addOnce(g.badges, gym.id);
+    news.push({ title: `${gym.name} Badge earned!`, body: `You beat ${gym.leader}.${GYMS[g.gyms.at + 1] ? ` Next: ${GYMS[g.gyms.at + 1].leader}.` : ""}` });
+    openGym(g, g.gyms.at + 1);
+  }
+  if (KANTO.every((id) => g.badges.includes(id)) && !g.badges.includes("elite")) {
+    g.badges = [...g.badges, "elite"];
+    g.league = { at: 0, week: week(new Date()), c: {} };
+    news.push({ title: "All 8 badges!", body: "The Elite Four awaits: one member a week, starting with Lorelei." });
+  }
+  leagueWeek(g);
+  const l = g.league;
+  if (!l || l.at >= LEAGUE.length || l.week !== week(new Date())) return;
+  const member = LEAGUE[l.at];
+  const need = member.options.map((parts) => parts.map((p) => p.min));
+  if (!optionsView(g, member.options, need, l.c ?? {}, false).some((o) => o.done)) return;
+  // The next member waits for next week.
+  g.league = { at: l.at + 1, week: addDays(l.week, 7), c: {} };
+  if (l.at + 1 < LEAGUE.length) {
+    news.push({ title: `You beat ${member.leader}!`, body: `Next week: ${LEAGUE[l.at + 1].leader}.` });
+    return;
+  }
+  g.badges = addOnce(g.badges, "champion");
+  g.fame = { at: Date.now(), party: partyOf(g).map(({ id, level }) => ({ id, level, shiny: g.shiny.includes(id) })) };
+  news.push({ title: "You are the Champion!", body: "Your team enters the Hall of Fame." });
+  summon(g, 150, "A presence answers the new Champion...");
+}
+// The open gym and the Elite Four as the apps draw them: `gym` (null once all eight are beaten) with
+// its options and their progress, `league` (null before the eighth badge or after the Champion).
+export function gymView(g0 = game(), now = new Date()) {
+  const g = { ...g0 };
+  if (!g.gyms) openGym(g, 0);
+  leagueWeek(g);
+  const at = g.gyms.at;
+  const gym = at < GYMS.length ? {
+    ...GYMS[at], index: at, since: g.gyms.since, head: g.gyms.head, options: optionsView(g, GYMS[at].options, g.gyms.need, g.gyms.c ?? {}, g.gyms.head),
+  } : null;
+  const l = g.league;
+  const league = l && l.at < LEAGUE.length ? {
+    ...LEAGUE[l.at], index: l.at, week: l.week, waiting: l.week > week(now),
+    options: optionsView(g, LEAGUE[l.at].options, LEAGUE[l.at].options.map((ps) => ps.map((p) => p.min)), l.week === week(now) ? l.c ?? {} : {}, false),
+  } : null;
+  return { gym, league, badges: g.badges.filter((id) => KANTO.includes(id)).length, champion: g.badges.includes("champion"), fame: g.fame };
+}
+
+// A legendary from a milestone waits at the front of the tall grass, even when it's full. Mutates g.
+function summon(g, id, body) {
+  if ((shared(CAUGHT) ?? []).includes(id) || g.wild.some((e) => e.id === id)) return;
+  g.wild = [{ id, at: Date.now(), balls: BALLS, weak: 0, project: null, staying: true }, ...g.wild];
+  g.encounters = { ...g.encounters, seen: g.encounters.seen + 1 };
+  tally(g, "seen");
+  notify({ title: `${nameOf(id)} appeared!`, body: `${body} It waits in the tall grass and won't flee.`, level: "success", icon: `mods/pokedex-agents/pokemon/${id}.png`, action: { name: "mod.open", args: { name: "pokedex-encounter" } } });
+}
+// The weekly quest paid (Bronze) in week `wk`: three weeks in a row bring the next bird. Mutates g.
+function weeklyDone(g, wk) {
+  const l = g.legends;
+  if (l.week === wk) return;
+  const run = l.week === addDays(wk, -7) ? l.run + 1 : 1;
+  const bird = BIRDS.find((id) => !(shared(CAUGHT) ?? []).includes(id) && !g.wild.some((e) => e.id === id));
+  g.legends = { ...l, week: wk, run: run >= 3 && bird ? 0 : run };
+  if (run >= 3 && bird) summon(g, bird, "Three strong weeks in a row drew a legendary bird.");
+}
+// A wild Pokemon: MISSING_SHARE of them from species not caught yet, never a legendary.
+function wildId() {
+  const have = new Set(shared(CAUGHT) ?? []);
+  const missing = Array.from({ length: 151 }, (_, i) => i + 1).filter((id) => !have.has(id) && !LEGENDARY.includes(id));
+  if (missing.length && Math.random() < MISSING_SHARE) return missing[Math.floor(Math.random() * missing.length)];
+  let id;
+  do id = 1 + Math.floor(Math.random() * 151); while (LEGENDARY.includes(id));
+  return id;
 }
 
 // Awards every badge the save already qualifies for, after progress came in from outside the rules
@@ -467,6 +667,9 @@ function bump(g, fn) {
         remember(g, "quests");
       }
       if (tier === 2 && !weekly) tally(g, "gold");
+      if (tier === 1 && !weekly) tally(g, "silver");
+      if (tier === 1 && weekly) count(g, "weekly", 0, 1);
+      if (tier === 0 && weekly) weeklyDone(g, q.week);
       notify({ title: `${weekly ? "Weekly" : "Daily"} quest: ${TIERS[tier]}!`, body: `${def.goal(x.need[tier])}: ${payText(p, q.week)}.`, level: "success", quiet: true });
     }
     c.tiers = { ...c.tiers, [x.id]: tier };
@@ -707,6 +910,7 @@ export function result(project, kind) {
   const done = g.results[project];
   if (!done || done.includes(kind)) return null;
   g.results = { ...g.results, [project]: [...done, kind] };
+  tally(g, kind);
   const evolved = award(g, Math.round(RESULT_XP[kind] * dailyRate(g)));
   // A merge also finds something rare.
   if (kind === "merged") {
@@ -740,6 +944,7 @@ export const defaultPartner = (id) => (LEGENDARY.includes(id) ? STARTERS[id % 3]
 // makes the partner faint until its next task.
 export function unblocked(project, ms) {
   const g = game();
+  tally(g, "answered");
   if (ms <= FAST_MS) {
     bump(g, (c) => { c.fast += 1; });
     tally(g, "fast");
@@ -750,7 +955,7 @@ export function unblocked(project, ms) {
     notify({ title: `${id ? nameOf(id) : "Your partner"} fainted!`, body: `${projectLabel(project)}'s agent waited ${Math.round(ms / 60000)} min. Its next task earns no XP.`, level: "warning", icon: id ? `mods/pokedex-agents/pokemon/${id}.png` : undefined });
   }
   learn(g, "agent");
-  put(g);
+  save(g);
 }
 
 // A wild Pokemon leaves the queue: "caught", "fled" (it got away or waited too long) or "left"
@@ -843,8 +1048,7 @@ export function finishTask(project, partnerId, ms, app = null, branch = null) {
   expire(g);
   g.wild = g.wild.map((e) => ({ ...e, weak: Math.min(3, (e.weak ?? 0) + 1) }));
   if (g.wild.length < WILD_MAX && Math.random() < ENCOUNTER_CHANCE) {
-    let wild = 1 + Math.floor(Math.random() * 151);
-    if (LEGENDARY.includes(wild)) wild = 1 + Math.floor(Math.random() * 151); // legendaries need a second roll
+    const wild = wildId();
     g.wild = [...g.wild, { id: wild, at: Date.now(), balls: BALLS, weak: 0, project }];
     g.encounters = { ...g.encounters, seen: g.encounters.seen + 1 };
     tally(g, "seen");
@@ -885,8 +1089,9 @@ export function throwBall(ball = "poke", index = 0) {
     save(g);
     return "caught";
   }
-  // It stays while any ball is left to throw.
-  if (after.balls > 0 || ["poke", "great", "ultra"].some((b) => (g.bag[b] ?? 0) > 0)) {
+  // It stays while any ball is left to throw (a legendary from a milestone, always: its free balls come back).
+  if (e.staying && after.balls === 0) after.balls = BALLS;
+  if (e.staying || after.balls > 0 || ["poke", "great", "ultra"].some((b) => (g.bag[b] ?? 0) > 0)) {
     g.wild = g.wild.map((w, i) => (i === index ? after : w));
     put(g);
     return "missed";
@@ -900,6 +1105,7 @@ export function throwBall(ball = "poke", index = 0) {
 export function runAway(index = 0) {
   const g = game();
   expire(g);
-  if (g.wild[index]) leave(g, index, "left");
+  // A legendary from a milestone can't be left behind: it waits.
+  if (g.wild[index] && !g.wild[index].staying) leave(g, index, "left");
   put(g);
 }
